@@ -92,6 +92,13 @@ function dayInWeek(date: string, weekStart: Date): number {
   return day >= 0 && day <= 6 ? day : -1
 }
 
+function localDateKey(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
 /**
  * Turns availability and serving (given by the group leader, or volunteered) into timetable blocks
  * for the week starting `weekStart` (a Monday). Weekly entries repeat every week; everything else
@@ -221,6 +228,8 @@ function availabilityEvents(
     const repeatUntil = event.repeatUntil
       ? new Date(`${event.repeatUntil}T23:59:59`)
       : start
+    const startDateKey = localDateKey(start)
+    const repeatUntilDateKey = localDateKey(repeatUntil)
     const cursor = new Date(weekStart)
 
     for (let day = 0; day < 7; day += 1) {
@@ -231,9 +240,14 @@ function availabilityEvents(
           ? date.getDay() === start.getDay()
           : event.recurrence === "monthly"
             ? date.getDate() === start.getDate()
-            : date.toDateString() === start.toDateString()
+            : localDateKey(date) === startDateKey
 
-      if (!sameDay || date > repeatUntil || date < start) continue
+      if (
+        !sameDay ||
+        localDateKey(date) > repeatUntilDateKey ||
+        localDateKey(date) < startDateKey
+      )
+        continue
 
       const startTime = `${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`
       const endTime = `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`
