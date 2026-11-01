@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 
 import { INITIAL_EVENTS, INITIAL_ORGANIZATIONS } from "./data"
+import { notifyEventsChanged } from "./eventsSync"
 import { isSupabaseConfigured, supabase } from "../../lib/supabase"
 
 import type {
@@ -286,11 +287,26 @@ export function useAdmin() {
       }
 
       const saved = mapEvent(result.data as Record<string, unknown>)
+      if (saved.status === "published") {
+        const notificationResult = await supabase.rpc("notify_event_members", {
+          p_event_id: saved.id,
+        })
+        if (notificationResult.error) {
+          console.error(
+            "Event saved, but member notifications could not be created:",
+            notificationResult.error,
+          )
+          setError(
+            `Event saved, but notifications could not be created: ${notificationResult.error.message}`,
+          )
+        }
+      }
       setEvents((current) =>
         id
           ? current.map((event) => (event.id === id ? saved : event))
           : [saved, ...current],
       )
+      notifyEventsChanged()
       return saved.id
     }
 
@@ -299,6 +315,7 @@ export function useAdmin() {
         ? current.map((event) => (event.id === id ? next : event))
         : [next, ...current],
     )
+    notifyEventsChanged()
     return next.id
   }
 
@@ -346,6 +363,7 @@ export function useAdmin() {
         event.id === id ? { ...event, status: "cancelled" } : event,
       ),
     )
+    notifyEventsChanged()
   }
 
   async function deleteEvent(id: string) {
@@ -358,6 +376,7 @@ export function useAdmin() {
     }
 
     setEvents((current) => current.filter((event) => event.id !== id))
+    notifyEventsChanged()
   }
 
   function findConflict(draft: EventDraft, editingId?: string) {

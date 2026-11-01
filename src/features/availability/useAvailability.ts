@@ -56,6 +56,7 @@ export function useAvailability() {
     initialTimetablePosition,
   )
   const [loadedFromServer, setLoadedFromServer] = useState(false)
+  const [error, setError] = useState("")
 
   useEffect(() => {
     if (!isSupabaseConfigured || !user) return
@@ -120,6 +121,8 @@ export function useAvailability() {
     editingOverride:
       editTarget?.kind === "override" ? editTarget.entry : undefined,
 
+    error,
+
     changePosition(change: Partial<TimetablePosition>) {
       setTimetablePosition((current) => ({ ...current, ...change }))
     },
@@ -140,24 +143,30 @@ export function useAvailability() {
 
     async saveRecurring(entry: RecurringAvail) {
       if (isSupabaseConfigured && user) {
-        await supabase.from("member_recurring_availability").upsert({
+        const result = await supabase.from("member_recurring_availability").upsert({
           id: entry.id,
           user_id: user.id,
           days: entry.days,
           start_time: entry.startTime,
           end_time: entry.endTime,
         })
+        if (result.error) {
+          setError(result.error.message)
+          return { ok: false, message: result.error.message }
+        }
       }
+      setError("")
       setRecurringEntries((prev) =>
         prev.find((e) => e.id === entry.id)
           ? prev.map((e) => (e.id === entry.id ? entry : e))
           : [...prev, entry],
       )
+      return { ok: true }
     },
 
     async saveOverride(entry: OneTimeOverride) {
       if (isSupabaseConfigured && user) {
-        await supabase.from("member_availability_overrides").upsert({
+        const result = await supabase.from("member_availability_overrides").upsert({
           id: entry.id,
           user_id: user.id,
           override_date: entry.date,
@@ -165,32 +174,52 @@ export function useAvailability() {
           start_time: entry.startTime || null,
           end_time: entry.endTime || null,
         })
+        if (result.error) {
+          setError(result.error.message)
+          return { ok: false, message: result.error.message }
+        }
       }
+      setError("")
       setOverrides((prev) =>
         prev.find((e) => e.id === entry.id)
           ? prev.map((e) => (e.id === entry.id ? entry : e))
           : [...prev, entry],
       )
+      return { ok: true }
     },
 
     async removeRecurring(id: string) {
-      if (isSupabaseConfigured && user)
-        await supabase
+      if (isSupabaseConfigured && user) {
+        const result = await supabase
           .from("member_recurring_availability")
           .delete()
           .eq("id", id)
           .eq("user_id", user.id)
+        if (result.error) {
+          setError(result.error.message)
+          return { ok: false, message: result.error.message }
+        }
+      }
+      setError("")
       setRecurringEntries((prev) => prev.filter((e) => e.id !== id))
+      return { ok: true }
     },
 
     async removeOverride(id: string) {
-      if (isSupabaseConfigured && user)
-        await supabase
+      if (isSupabaseConfigured && user) {
+        const result = await supabase
           .from("member_availability_overrides")
           .delete()
           .eq("id", id)
           .eq("user_id", user.id)
+        if (result.error) {
+          setError(result.error.message)
+          return { ok: false, message: result.error.message }
+        }
+      }
+      setError("")
       setOverrides((prev) => prev.filter((e) => e.id !== id))
+      return { ok: true }
     },
   }
 }

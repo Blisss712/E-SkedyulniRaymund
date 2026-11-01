@@ -40,7 +40,9 @@ import { useSlots } from "./features/slots/useSlots"
 import { AdminScreen } from "./features/admin/admin"
 import { AdminLoginScreen } from "./features/admin/login"
 import type { AdminEvent } from "./features/admin/types"
+import { EVENTS_CHANGED_EVENT } from "./features/admin/eventsSync"
 import { isSupabaseConfigured, supabase } from "./lib/supabase"
+import { ScheduleAssistantPanel } from "./features/assistant/assistant"
 
 function AppContent() {
   const isDesktop = useIsDesktop()
@@ -60,40 +62,47 @@ function AppContent() {
   const slots = useSlots()
   const [publishedEvents, setPublishedEvents] = useState<AdminEvent[]>([])
 
+  const [assistantOpen, setAssistantOpen] = useState(false)
+
   useEffect(() => {
     if (!isSupabaseConfigured) return
 
     let active = true
-    supabase
-      .from("events")
-      .select(
-        "id, organization_id, title, description, starts_at, ends_at, location, capacity, registration_deadline, visibility, recurrence, repeat_until, status, created_at",
-      )
-      .eq("status", "published")
-      .then(({ data, error }) => {
-        if (!active || error) return
-        setPublishedEvents(
-          (data ?? []).map((row) => ({
-            id: row.id,
-            organizationId: row.organization_id,
-            title: row.title,
-            description: row.description,
-            startsAt: row.starts_at,
-            endsAt: row.ends_at,
-            location: row.location,
-            capacity: row.capacity,
-            registrationDeadline: row.registration_deadline ?? "",
-            visibility: row.visibility,
-            recurrence: row.recurrence,
-            repeatUntil: row.repeat_until?.slice(0, 10) ?? "",
-            status: row.status,
-            createdAt: row.created_at,
-          })),
+    const loadPublishedEvents = async () => {
+      const { data, error } = await supabase
+        .from("events")
+        .select(
+          "id, organization_id, title, description, starts_at, ends_at, location, capacity, registration_deadline, visibility, recurrence, repeat_until, status, created_at",
         )
-      })
+        .eq("status", "published")
+
+      if (!active || error) return
+      setPublishedEvents(
+        (data ?? []).map((row) => ({
+          id: row.id,
+          organizationId: row.organization_id,
+          title: row.title,
+          description: row.description,
+          startsAt: row.starts_at,
+          endsAt: row.ends_at,
+          location: row.location,
+          capacity: row.capacity,
+          registrationDeadline: row.registration_deadline ?? "",
+          visibility: row.visibility,
+          recurrence: row.recurrence,
+          repeatUntil: row.repeat_until?.slice(0, 10) ?? "",
+          status: row.status,
+          createdAt: row.created_at,
+        })),
+      )
+    }
+
+    void loadPublishedEvents()
+    window.addEventListener(EVENTS_CHANGED_EVENT, loadPublishedEvents)
 
     return () => {
       active = false
+      window.removeEventListener(EVENTS_CHANGED_EVENT, loadPublishedEvents)
     }
   }, [profile?.id])
 
@@ -166,6 +175,7 @@ function AppContent() {
         embedded={embedded}
         isAdmin={isAdmin || adminAuthenticated}
         onAdmin={() => go("admin")}
+        onAssistant={() => setAssistantOpen(true)}
       >
         {homeTab === "availability" ? (
           <AvailabilityTab
@@ -200,8 +210,16 @@ function AppContent() {
               setDashboardReturnScreen(embedded ? "admin" : "home")
               go("add-override")
             }}
-            onRemoveRecurring={availability.removeRecurring}
-            onRemoveOverride={availability.removeOverride}
+            onRemoveRecurring={(id) => {
+              void availability.removeRecurring(id).then((result) => {
+                if (!result.ok) window.alert(result.message)
+              })
+            }}
+            onRemoveOverride={(id) => {
+              void availability.removeOverride(id).then((result) => {
+                if (!result.ok) window.alert(result.message)
+              })
+            }}
           />
         ) : (
           <SlotList
@@ -210,6 +228,16 @@ function AppContent() {
               setDashboardReturnScreen(embedded ? "admin" : "home")
               go(slots.openSlot(slot))
             }}
+          />
+        )}
+        {assistantOpen && (
+          <ScheduleAssistantPanel
+            facts={{
+              recurringAvailability: availability.recurringEntries,
+              overrides: availability.overrides,
+              slots: slots.slots,
+            }}
+            onClose={() => setAssistantOpen(false)}
           />
         )}
       </HomeScreen>
@@ -348,8 +376,13 @@ function AppContent() {
         <SetRecurringScreen
           initial={availability.editingRecurring}
           onSave={(entry) => {
-            availability.saveRecurring(entry)
-            go(dashboardReturnScreen)
+            void availability.saveRecurring(entry).then((result) => {
+              if (!result.ok) {
+                window.alert(result.message)
+                return
+              }
+              go(dashboardReturnScreen)
+            })
           }}
           onBack={() => go(dashboardReturnScreen)}
         />
@@ -360,8 +393,13 @@ function AppContent() {
         <AddOverrideScreen
           initial={availability.editingOverride}
           onSave={(entry) => {
-            availability.saveOverride(entry)
-            go(dashboardReturnScreen)
+            void availability.saveOverride(entry).then((result) => {
+              if (!result.ok) {
+                window.alert(result.message)
+                return
+              }
+              go(dashboardReturnScreen)
+            })
           }}
           onBack={() => go(dashboardReturnScreen)}
         />
@@ -373,8 +411,13 @@ function AppContent() {
         <SlotVolunteerScreen
           slot={slots.activeSlot}
           onVolunteer={() => {
-            slots.volunteer()
-            go("slot-serving")
+            void slots.volunteer().then((result) => {
+              if (!result.ok) {
+                window.alert(result.message)
+                return
+              }
+              go("slot-serving")
+            })
           }}
           onBack={() => go(dashboardReturnScreen)}
         />
@@ -385,8 +428,13 @@ function AppContent() {
         <SlotServingScreen
           slot={slots.activeSlot}
           onCancelSpot={() => {
-            slots.cancelSpot()
-            go(dashboardReturnScreen)
+            void slots.cancelSpot().then((result) => {
+              if (!result.ok) {
+                window.alert(result.message)
+                return
+              }
+              go(dashboardReturnScreen)
+            })
           }}
           onBack={() => go(dashboardReturnScreen)}
         />
