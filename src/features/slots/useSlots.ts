@@ -26,6 +26,7 @@ export function useSlots() {
 
   const [activeSlot, setActiveSlot] = useState<Slot | null>(null)
   const [serverBacked, setServerBacked] = useState(false)
+  const [error, setError] = useState("")
 
   useEffect(() => {
     if (!isSupabaseConfigured || !user) return
@@ -85,6 +86,8 @@ export function useSlots() {
 
     setActiveSlot,
 
+    error,
+
     /** Selects a slot from the list and returns the screen that matches its status. */
 
     openSlot(slot: Slot): SlotsScreen {
@@ -98,15 +101,20 @@ export function useSlots() {
     },
 
     async volunteer() {
-      if (!activeSlot) return
+      if (!activeSlot) return { ok: false, message: "No slot selected." }
 
       if (isSupabaseConfigured && user) {
-        await supabase.from("slot_signups").insert({
+        const result = await supabase.from("slot_signups").insert({
           slot_id: activeSlot.id,
           user_id: user.id,
         })
+        if (result.error) {
+          setError(result.error.message)
+          return { ok: false, message: result.error.message }
+        }
       }
 
+      setError("")
       setSlots((prev) =>
         prev.map((s) =>
           s.id === activeSlot.id
@@ -120,19 +128,25 @@ export function useSlots() {
           ? { ...prev, status: "serving", filledSpots: prev.filledSpots + 1 }
           : prev,
       )
+      return { ok: true }
     },
 
     async cancelSpot() {
-      if (!activeSlot) return
+      if (!activeSlot) return { ok: false, message: "No slot selected." }
 
       if (isSupabaseConfigured && user) {
-        await supabase
+        const result = await supabase
           .from("slot_signups")
           .delete()
           .eq("slot_id", activeSlot.id)
           .eq("user_id", user.id)
+        if (result.error) {
+          setError(result.error.message)
+          return { ok: false, message: result.error.message }
+        }
       }
 
+      setError("")
       setSlots((prev) =>
         prev.map((s) =>
           s.id === activeSlot.id
@@ -144,6 +158,7 @@ export function useSlots() {
             : s,
         ),
       )
+      return { ok: true }
     },
   }
 }

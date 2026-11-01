@@ -258,27 +258,6 @@ export function HomeScreen({
             : `mx-auto px-4 py-5 ${wide ? "max-w-6xl" : "max-w-3xl"}`
         }
       >
-        {!embedded && onAssistant && (
-          <div className="mb-5">
-            <button
-              type="button"
-              onClick={onAssistant}
-              className="flex w-full items-center justify-between rounded-2xl border border-[#C9921A]/40 bg-[#FEF3DC] px-5 py-4 text-left shadow-sm transition-colors hover:bg-[#FBECCB]"
-            >
-              <span>
-                <span className="block text-sm font-bold uppercase tracking-wide text-[#8B6412]">
-                  Schedule assistant
-                </span>
-                <span className="mt-1 block text-base font-semibold text-[#1B3A6B]">
-                  Ask when you are free or find an open slot
-                </span>
-              </span>
-              <span className="text-2xl text-[#C9921A]" aria-hidden="true">
-                →
-              </span>
-            </button>
-          </div>
-        )}
         {children}
       </main>
 
@@ -312,6 +291,44 @@ export function HomeScreen({
           </button>
         ))}
       </nav>
+
+      {onAssistant && (
+        <button
+          type="button"
+          onClick={onAssistant}
+          aria-label="Open schedule assistant"
+          title="Ask the schedule assistant"
+          className="fixed right-5 z-40 flex h-16 w-16 items-center justify-center rounded-full border-4 border-white bg-[#1B3A6B] text-white shadow-[0_8px_24px_rgba(27,58,107,0.3)] transition-transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-[#C9921A]/40 active:scale-95"
+          style={{
+            bottom: embedded
+              ? "1.25rem"
+              : "calc(5.75rem + env(safe-area-inset-bottom))",
+          }}
+        >
+          <span
+            className="absolute inset-1 rounded-full border-2 border-[#C9921A]/80"
+            aria-hidden="true"
+          />
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            className="relative h-7 w-7"
+            aria-hidden="true"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M7.5 18.5 4 21l.9-4.1A8 8 0 0 1 4 12c0-4.4 3.6-8 8-8s8 3.6 8 8-3.6 8-8 8c-1.6 0-3.1-.5-4.5-1.5Z"
+            />
+            <path
+              strokeLinecap="round"
+              d="M8.5 12h.01M12 12h.01M15.5 12h.01"
+            />
+          </svg>
+        </button>
+      )}
 
       {showMinistries && (
         <MinistrySheet
