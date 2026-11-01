@@ -573,8 +573,15 @@ BEGIN
             ),
             'event',
             NEW.id
-        FROM public.organization_member_accounts AS membership
-        WHERE membership.organization_id = NEW.organization_id
+        FROM (
+            SELECT organization_id, user_id
+            FROM public.organization_member_accounts
+            WHERE organization_id = NEW.organization_id
+            UNION
+            SELECT organization_id, user_id
+            FROM public.organization_members
+            WHERE organization_id = NEW.organization_id
+        ) AS membership
         ON CONFLICT (user_id, event_id, kind)
         WHERE event_id IS NOT NULL
         DO NOTHING;

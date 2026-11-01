@@ -206,6 +206,11 @@ export function HomeScreen({
         }
       >
         <div className={`mx-auto ${wide ? "max-w-6xl" : "max-w-3xl"}`}>
+          {embedded && (
+            <div className="mb-3 flex justify-end">
+              <NotificationCenter embedded />
+            </div>
+          )}
           {!embedded && (
             <div className="mb-4 flex items-center justify-between gap-4">
               <div>

@@ -39,7 +39,8 @@ already has the schema installed, run `supabase/notifications.sql` once in the
 Supabase SQL Editor.
 
 When an administrator publishes an event, a database trigger creates one
-notification for each member of that organization. The schema also includes
+notification for each member and organization administrator assigned to that
+organization. The schema also includes
 `create_event_happening_notifications()`, which creates one reminder when a
 published event is in progress. To run those reminders automatically, enable
 the `pg_cron` extension in Supabase under **Database -> Extensions**, then run:

@@ -123,7 +123,11 @@ function escapeHtml(value: string) {
   })
 }
 
-export function NotificationCenter() {
+export function NotificationCenter({
+  embedded = false,
+}: {
+  embedded?: boolean
+}) {
   const { user } = useAuth()
   const [notifications, setNotifications] =
     useState<Notification[]>(readNotifications)
@@ -347,7 +351,11 @@ export function NotificationCenter() {
             ? `Notifications, ${unreadCount} unread`
             : "Notifications"
         }
-        className="relative flex h-11 w-11 items-center justify-center rounded-xl border border-white/30 bg-white/10 text-white transition-colors hover:bg-white/20"
+        className={`relative flex h-11 w-11 items-center justify-center rounded-xl border transition-colors ${
+          embedded
+            ? "border-[#D1D9E8] bg-white text-[#1B3A6B] hover:bg-[#F4F6FB]"
+            : "border-white/30 bg-white/10 text-white hover:bg-white/20"
+        }`}
       >
         <svg
           viewBox="0 0 24 24"
@@ -364,7 +372,11 @@ export function NotificationCenter() {
           />
         </svg>
         {unreadCount > 0 && (
-          <span className="absolute -right-1 -top-1 flex min-w-5 h-5 items-center justify-center rounded-full bg-[#C0392B] px-1 text-[11px] font-extrabold text-white ring-2 ring-[#1B3A6B]">
+          <span
+            className={`absolute -right-1 -top-1 flex min-w-5 h-5 items-center justify-center rounded-full bg-[#C0392B] px-1 text-[11px] font-extrabold text-white ${
+              embedded ? "ring-2 ring-white" : "ring-2 ring-[#1B3A6B]"
+            }`}
+          >
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         )}
