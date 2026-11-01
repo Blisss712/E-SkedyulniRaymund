@@ -38,6 +38,23 @@ sessions. The main `schema.sql` includes this setup. For an existing project tha
 already has the schema installed, run `supabase/notifications.sql` once in the
 Supabase SQL Editor.
 
+When an administrator publishes an event, a database trigger creates one
+notification for each member of that organization. The schema also includes
+`create_event_happening_notifications()`, which creates one reminder when a
+published event is in progress. To run those reminders automatically, enable
+the `pg_cron` extension in Supabase under **Database -> Extensions**, then run:
+
+```sql
+SELECT cron.schedule(
+  'e-skedyul-event-happening-reminders',
+  '* * * * *',
+  $$SELECT public.create_event_happening_notifications();$$
+);
+```
+
+The event and reminder rows are deduplicated by user, event, and notification
+kind, so the cron job can run every minute without sending duplicates.
+
 ## 2.1 Schedule assistant (optional)
 
 The member dashboard includes a schedule assistant that answers questions from the

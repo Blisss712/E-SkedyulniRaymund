@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react"
 import { isSupabaseConfigured, supabase } from "../lib/supabase"
 import { useAuth } from "../features/auth/AuthContext"
 
-type NotificationKind = "schedule" | "approval" | "slot"
+type NotificationKind =
+  | "schedule"
+  | "approval"
+  | "slot"
+  | "event"
+  | "event_reminder"
 
 type Notification = {
   id: string
@@ -91,12 +96,15 @@ function fromDatabaseRow(row: {
 }
 
 function iconFor(kind: NotificationKind) {
+  if (kind === "event" || kind === "event_reminder") return "!"
   if (kind === "schedule") return "◷"
   if (kind === "approval") return "✓"
   return "✦"
 }
 
 function colorFor(kind: NotificationKind) {
+  if (kind === "event_reminder") return "bg-[#C0392B]"
+  if (kind === "event") return "bg-[#1B3A6B]"
   if (kind === "schedule") return "bg-[#1B3A6B]"
   if (kind === "approval") return "bg-[#2D7A4F]"
   return "bg-[#C9921A]"
