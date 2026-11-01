@@ -575,7 +575,9 @@ BEGIN
             NEW.id
         FROM public.organization_member_accounts AS membership
         WHERE membership.organization_id = NEW.organization_id
-        ON CONFLICT (user_id, event_id, kind) DO NOTHING;
+        ON CONFLICT (user_id, event_id, kind)
+        WHERE event_id IS NOT NULL
+        DO NOTHING;
     END IF;
 
     RETURN NEW;
@@ -610,7 +612,9 @@ BEGIN
     WHERE event.status = 'published'
       AND event.starts_at <= NOW()
       AND event.ends_at > NOW()
-    ON CONFLICT (user_id, event_id, kind) DO NOTHING;
+    ON CONFLICT (user_id, event_id, kind)
+    WHERE event_id IS NOT NULL
+    DO NOTHING;
 
     GET DIAGNOSTICS inserted_count = ROW_COUNT;
     RETURN inserted_count;
