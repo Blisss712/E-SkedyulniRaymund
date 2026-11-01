@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
+import { isSupabaseConfigured, supabase } from "../lib/supabase"
+import { useAuth } from "../features/auth/AuthContext"
 
 type NotificationKind = "schedule" | "approval" | "slot"
 
@@ -52,6 +54,42 @@ function readNotifications(): Notification[] {
   }
 }
 
+function formatTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+
+  const elapsed = Date.now() - date.getTime()
+  if (elapsed < 60_000) return "Just now"
+  if (elapsed < 60 * 60_000) {
+    return `${Math.floor(elapsed / 60_000)} min ago`
+  }
+  if (elapsed < 24 * 60 * 60_000) {
+    return `${Math.floor(elapsed / (60 * 60_000))} hr ago`
+  }
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  })
+}
+
+function fromDatabaseRow(row: {
+  id: string
+  title: string
+  message: string
+  kind: NotificationKind
+  read_at: string | null
+  created_at: string
+}): Notification {
+  return {
+    id: row.id,
+    title: row.title,
+    message: row.message,
+    time: formatTime(row.created_at),
+    kind: row.kind,
+    unread: row.read_at === null,
+  }
+}
+
 function iconFor(kind: NotificationKind) {
   if (kind === "schedule") return "◷"
   if (kind === "approval") return "✓"
@@ -78,9 +116,12 @@ function escapeHtml(value: string) {
 }
 
 export function NotificationCenter() {
-  const [notifications, setNotifications] = useState<Notification[]>(readNotifications)
+  const { user } = useAuth()
+  const [notifications, setNotifications] =
+    useState<Notification[]>(readNotifications)
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState<"all" | "unread">("all")
+  const [backendError, setBackendError] = useState<string | null>(null)
 
   const unreadCount = notifications.filter((notification) => notification.unread).length
   const visibleNotifications = useMemo(
@@ -96,6 +137,68 @@ export function NotificationCenter() {
   }, [notifications])
 
   useEffect(() => {
+    let active = true
+
+    async function loadNotifications() {
+      if (!isSupabaseConfigured || !user) {
+        if (active) setNotifications(readNotifications())
+        return
+      }
+
+      const { data, error } = await supabase
+        .from("notifications")
+        .select("id, title, message, kind, read_at, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(50)
+
+      if (!active) return
+      if (error) {
+        console.error("Unable to load notifications:", error)
+        setBackendError("Notifications are temporarily offline.")
+        setNotifications(readNotifications())
+        return
+      }
+
+      setBackendError(null)
+      setNotifications((data ?? []).map(fromDatabaseRow))
+    }
+
+    void loadNotifications()
+
+    if (!isSupabaseConfigured || !user) {
+      return () => {
+        active = false
+      }
+    }
+
+    const channel = supabase
+      .channel(`notifications:${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          void loadNotifications()
+        },
+      )
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") {
+          console.error("Unable to subscribe to notification updates.")
+        }
+      })
+
+    return () => {
+      active = false
+      void supabase.removeChannel(channel)
+    }
+  }, [user])
+
+  useEffect(() => {
     function closeOnOutsideClick(event: MouseEvent) {
       if (!(event.target instanceof Element)) return
       if (!event.target.closest("[data-notification-center]")) setOpen(false)
@@ -109,6 +212,19 @@ export function NotificationCenter() {
     setNotifications((current) =>
       current.map((notification) => ({ ...notification, unread: false })),
     )
+    if (isSupabaseConfigured && user) {
+      void supabase
+        .from("notifications")
+        .update({ read_at: new Date().toISOString() })
+        .eq("user_id", user.id)
+        .is("read_at", null)
+        .then(({ error }) => {
+          if (error) {
+            console.error("Unable to mark notifications as read:", error)
+            setBackendError("Could not sync notification changes.")
+          }
+        })
+    }
   }
 
   function markRead(id: string) {
@@ -117,27 +233,88 @@ export function NotificationCenter() {
         notification.id === id ? { ...notification, unread: false } : notification,
       ),
     )
+    if (isSupabaseConfigured && user) {
+      void supabase
+        .from("notifications")
+        .update({ read_at: new Date().toISOString() })
+        .eq("id", id)
+        .eq("user_id", user.id)
+        .then(({ error }) => {
+          if (error) {
+            console.error("Unable to mark notification as read:", error)
+            setBackendError("Could not sync notification changes.")
+          }
+        })
+    }
   }
 
   function remove(id: string) {
     setNotifications((current) =>
       current.filter((notification) => notification.id !== id),
     )
+    if (isSupabaseConfigured && user) {
+      void supabase
+        .from("notifications")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", user.id)
+        .then(({ error }) => {
+          if (error) {
+            console.error("Unable to dismiss notification:", error)
+            setBackendError("Could not sync notification changes.")
+          }
+        })
+    }
   }
 
   function simulateNotification() {
-    setNotifications((current) => [
-      {
-        id: `activity-${Date.now()}`,
-        title: "New schedule update",
-        message: "A new activity was added to your ministry schedule.",
-        time: "Just now",
-        kind: "schedule",
-        unread: true,
-      },
-      ...current,
-    ])
+    const notification = {
+      user_id: user?.id,
+      title: "New schedule update",
+      message: "A new activity was added to your ministry schedule.",
+      kind: "schedule" as const,
+    }
+
+    if (isSupabaseConfigured && user) {
+      void supabase
+        .from("notifications")
+        .insert(notification)
+        .then(({ error }) => {
+          if (error) {
+            console.error("Unable to create notification:", error)
+            setBackendError("Could not create a notification.")
+          }
+        })
+    } else {
+      setNotifications((current) => [
+        {
+          id: `activity-${Date.now()}`,
+          title: notification.title,
+          message: notification.message,
+          time: "Just now",
+          kind: notification.kind,
+          unread: true,
+        },
+        ...current,
+      ])
+    }
     setOpen(true)
+  }
+
+  function clearAll() {
+    setNotifications([])
+    if (isSupabaseConfigured && user) {
+      void supabase
+        .from("notifications")
+        .delete()
+        .eq("user_id", user.id)
+        .then(({ error }) => {
+          if (error) {
+            console.error("Unable to clear notifications:", error)
+            setBackendError("Could not sync notification changes.")
+          }
+        })
+    }
   }
 
   const panelNotifications = visibleNotifications
@@ -201,6 +378,11 @@ export function NotificationCenter() {
                   ? "You’re all caught up."
                   : `${unreadCount} unread notification${unreadCount === 1 ? "" : "s"}`}
               </p>
+              {backendError && (
+                <p className="mt-1 text-[11px] font-semibold text-[#C0392B]">
+                  {backendError}
+                </p>
+              )}
             </div>
             <button
               type="button"
@@ -309,7 +491,7 @@ export function NotificationCenter() {
             </button>
             <button
               type="button"
-              onClick={() => setNotifications([])}
+              onClick={clearAll}
               disabled={notifications.length === 0}
               className="text-xs font-bold text-[#64748B] hover:text-[#C0392B] disabled:cursor-not-allowed disabled:opacity-40"
             >

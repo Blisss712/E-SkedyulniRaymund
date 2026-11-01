@@ -168,6 +168,24 @@ CREATE TABLE IF NOT EXISTS public.organization_join_requests (
     reviewer_note TEXT NOT NULL DEFAULT ''
 );
 
+-- ------------------------------------------------------------------------------
+-- 5. NOTIFICATIONS
+-- ------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    title VARCHAR(180) NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    kind VARCHAR(20) NOT NULL DEFAULT 'schedule'
+        CHECK (kind IN ('schedule', 'approval', 'slot')),
+    read_at TIMESTAMPTZ NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user_created
+    ON public.notifications(user_id, created_at DESC);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_organizations_status ON public.organizations(status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_organizations_join_code_ci ON public.organizations(upper(join_code));
@@ -362,6 +380,7 @@ ALTER TABLE public.member_availability_overrides ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.volunteer_slots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.slot_signups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.member_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 
 -- Admin Profiles
 DROP POLICY IF EXISTS "Read own admin profile or any if admin" ON public.admin_profiles;
@@ -491,6 +510,42 @@ CREATE POLICY "Admins manage assignments" ON public.member_assignments
 FOR ALL TO authenticated
 USING (public.is_admin(auth.uid()))
 WITH CHECK (public.is_admin(auth.uid()));
+
+-- Notifications are private to the authenticated user who owns them.
+DROP POLICY IF EXISTS "Users read own notifications" ON public.notifications;
+CREATE POLICY "Users read own notifications" ON public.notifications
+FOR SELECT TO authenticated
+USING (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "Users create own notifications" ON public.notifications;
+CREATE POLICY "Users create own notifications" ON public.notifications
+FOR INSERT TO authenticated
+WITH CHECK (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "Users update own notifications" ON public.notifications;
+CREATE POLICY "Users update own notifications" ON public.notifications
+FOR UPDATE TO authenticated
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "Users delete own notifications" ON public.notifications;
+CREATE POLICY "Users delete own notifications" ON public.notifications
+FOR DELETE TO authenticated
+USING (user_id = auth.uid());
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_publication_tables
+        WHERE pubname = 'supabase_realtime'
+          AND schemaname = 'public'
+          AND tablename = 'notifications'
+    ) THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.notifications;
+    END IF;
+END
+$$;
 
 -- ------------------------------------------------------------------------------
 -- 8. INITIAL SEED DATA (OPTIONAL SAMPLES)
