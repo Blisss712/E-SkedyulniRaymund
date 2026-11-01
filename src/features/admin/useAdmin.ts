@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 
 import { INITIAL_EVENTS, INITIAL_ORGANIZATIONS } from "./data"
-import { notifyEventsChanged } from "./eventsSync"
 import { isSupabaseConfigured, supabase } from "../../lib/supabase"
 
 import type {
@@ -292,7 +291,6 @@ export function useAdmin() {
           ? current.map((event) => (event.id === id ? saved : event))
           : [saved, ...current],
       )
-      notifyEventsChanged()
       return saved.id
     }
 
@@ -301,7 +299,6 @@ export function useAdmin() {
         ? current.map((event) => (event.id === id ? next : event))
         : [next, ...current],
     )
-    notifyEventsChanged()
     return next.id
   }
 
@@ -349,7 +346,6 @@ export function useAdmin() {
         event.id === id ? { ...event, status: "cancelled" } : event,
       ),
     )
-    notifyEventsChanged()
   }
 
   async function deleteEvent(id: string) {
@@ -362,7 +358,6 @@ export function useAdmin() {
     }
 
     setEvents((current) => current.filter((event) => event.id !== id))
-    notifyEventsChanged()
   }
 
   function findConflict(draft: EventDraft, editingId?: string) {
