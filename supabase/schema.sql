@@ -628,6 +628,61 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.notify_event_members(p_event_id VARCHAR)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    target_event public.events%ROWTYPE;
+    inserted_count INTEGER;
+BEGIN
+    IF NOT public.is_admin(auth.uid()) THEN
+        RAISE EXCEPTION 'Only administrators can notify event members';
+    END IF;
+
+    SELECT * INTO target_event
+    FROM public.events
+    WHERE id = p_event_id
+      AND status = 'published';
+
+    IF NOT FOUND THEN
+        RETURN 0;
+    END IF;
+
+    INSERT INTO public.notifications (user_id, title, message, kind, event_id)
+    SELECT
+        membership.user_id,
+        'New event scheduled',
+        format(
+            '%s is scheduled for %s at %s.',
+            target_event.title,
+            to_char(target_event.starts_at AT TIME ZONE 'Asia/Manila', 'Mon DD, YYYY'),
+            to_char(target_event.starts_at AT TIME ZONE 'Asia/Manila', 'FMHH12:MI AM')
+        ),
+        'event',
+        target_event.id
+    FROM (
+        SELECT organization_id, user_id
+        FROM public.organization_member_accounts
+        WHERE organization_id = target_event.organization_id
+        UNION
+        SELECT organization_id, user_id
+        FROM public.organization_members
+        WHERE organization_id = target_event.organization_id
+    ) AS membership
+    ON CONFLICT (user_id, event_id, kind)
+    WHERE event_id IS NOT NULL
+    DO NOTHING;
+
+    GET DIAGNOSTICS inserted_count = ROW_COUNT;
+    RETURN inserted_count;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.notify_event_members(VARCHAR) TO authenticated;
+
 -- ------------------------------------------------------------------------------
 -- 8. INITIAL SEED DATA (OPTIONAL SAMPLES)
 -- ------------------------------------------------------------------------------

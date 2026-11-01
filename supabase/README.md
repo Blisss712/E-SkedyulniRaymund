@@ -56,6 +56,14 @@ SELECT cron.schedule(
 The event and reminder rows are deduplicated by user, event, and notification
 kind, so the cron job can run every minute without sending duplicates.
 
+The admin event save flow also calls `notify_event_members(event_id)` after a
+published event is saved. To backfill notifications for an event that was
+already published before this function was installed, run:
+
+```sql
+SELECT public.notify_event_members('your-event-id');
+```
+
 ## 2.1 Schedule assistant (optional)
 
 The member dashboard includes a schedule assistant that answers questions from the
