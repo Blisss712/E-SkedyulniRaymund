@@ -1,6 +1,7 @@
 import { useState } from "react"
 
 import { Button, useSheetClose } from "./ui"
+import { NotificationCenter } from "./notifications"
 
 export type HomeTab = "availability" | "slots"
 
@@ -214,6 +215,7 @@ export function HomeScreen({
                 <p className="text-xl font-bold">E-Skedyul</p>
               </div>
               <div className="flex items-center gap-2">
+                <NotificationCenter />
                 {isAdmin && onAdmin && (
                   <button
                     type="button"
