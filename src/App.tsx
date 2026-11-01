@@ -1,92 +1,140 @@
 import { useState, useEffect, useRef } from "react"
+
 import { BACK_TARGETS, type Screen } from "./navigation"
+
 import { useIsDesktop } from "./shared/ui"
+
 import { applyStatusBar, listenForBackButton } from "./shared/native"
+
 import { HomeScreen, MINISTRIES, type HomeTab } from "./shared/home"
 
 // Auth
+
 import { AuthProvider, useAuth } from "./features/auth/AuthContext"
+
 import { AuthScreen } from "./features/auth/AuthScreen"
 
 // Wizard
+
 import {
   WelcomeScreen,
   TellNameScreen,
   JoinGroupScreen,
   PendingScreen,
 } from "./features/wizard/wizard"
+
 import {
   DesktopJoinGroupScreen,
   DesktopPendingScreen,
 } from "./features/wizard/desktop"
+
 import { useWizard } from "./features/wizard/useWizard"
 
 // Availability
+
 import {
   AvailabilityTab,
   SetRecurringScreen,
   AddOverrideScreen,
 } from "./features/availability/availability"
+
 import { useAvailability } from "./features/availability/useAvailability"
 
 // Open Slots
+
 import {
   SlotList,
   SlotVolunteerScreen,
   SlotServingScreen,
   SlotFilledScreen,
 } from "./features/slots/slots"
+
 import { useSlots } from "./features/slots/useSlots"
+
 import { AdminScreen } from "./features/admin/admin"
+
 import { AdminLoginScreen } from "./features/admin/login"
+
 import type { AdminEvent } from "./features/admin/types"
+
 import { isSupabaseConfigured, supabase } from "./lib/supabase"
+
+import { ScheduleAssistantPanel } from "./features/assistant/assistant"
 
 function AppContent() {
   const isDesktop = useIsDesktop()
+
   const { profile, user, isAdmin, signOut } = useAuth()
 
   const [screen, setScreen] = useState<Screen>("welcome")
+
   const [prevScreen, setPrevScreen] = useState<Screen>("welcome")
+
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
+
   const [dashboardReturnScreen, setDashboardReturnScreen] =
     useState<"home" | "admin">("home")
 
   const [homeTab, setHomeTab] = useState<HomeTab>("availability")
+
   const [ministry, setMinistry] = useState(MINISTRIES[0])
 
   const wizard = useWizard()
+
   const availability = useAvailability()
+
   const slots = useSlots()
+
   const [publishedEvents, setPublishedEvents] = useState<AdminEvent[]>([])
+
+  const [assistantOpen, setAssistantOpen] = useState(false)
 
   useEffect(() => {
     if (!isSupabaseConfigured) return
 
     let active = true
+
     supabase
+
       .from("events")
+
       .select(
         "id, organization_id, title, description, starts_at, ends_at, location, capacity, registration_deadline, visibility, recurrence, repeat_until, status, created_at",
       )
+
       .eq("status", "published")
+
       .then(({ data, error }) => {
         if (!active || error) return
+
         setPublishedEvents(
           (data ?? []).map((row) => ({
             id: row.id,
+
             organizationId: row.organization_id,
+
             title: row.title,
+
             description: row.description,
+
             startsAt: row.starts_at,
+
             endsAt: row.ends_at,
+
             location: row.location,
+
             capacity: row.capacity,
+
             registrationDeadline: row.registration_deadline ?? "",
+
             visibility: row.visibility,
+
             recurrence: row.recurrence,
+
             repeatUntil: row.repeat_until?.slice(0, 10) ?? "",
+
             status: row.status,
+
             createdAt: row.created_at,
           })),
         )
@@ -99,52 +147,74 @@ function AppContent() {
 
   function go(to: Screen) {
     setPrevScreen(screen)
+
     setScreen(to)
   }
 
   function reset() {
     signOut()
+
     wizard.reset()
+
     setHomeTab("availability")
+
     setMinistry(MINISTRIES[0])
+
     availability.resetPosition()
+
     go("welcome")
   }
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "smooth" })
+
     applyStatusBar(screen)
   }, [screen])
 
   // Android back button support (only active inside the Android app).
+
   const screenRef = useRef(screen)
+
   screenRef.current = screen
+
   const prevScreenRef = useRef(prevScreen)
+
   prevScreenRef.current = prevScreen
+
   const dashboardReturnScreenRef = useRef(dashboardReturnScreen)
+
   dashboardReturnScreenRef.current = dashboardReturnScreen
+
   const goRef = useRef(go)
+
   goRef.current = go
 
   useEffect(
     () =>
       listenForBackButton(
         BACK_TARGETS,
+
         () => screenRef.current,
+
         () => prevScreenRef.current,
+
         (to) => {
           const current = screenRef.current
+
           if (
             current === "set-recurring" ||
             current === "add-override" ||
             current.startsWith("slot-")
           ) {
             goRef.current(dashboardReturnScreenRef.current)
+
             return
           }
+
           goRef.current(to)
         },
       ),
+
     [],
   )
 
@@ -166,6 +236,7 @@ function AppContent() {
         embedded={embedded}
         isAdmin={isAdmin || adminAuthenticated}
         onAdmin={() => go("admin")}
+        onAssistant={() => setAssistantOpen(true)}
       >
         {homeTab === "availability" ? (
           <AvailabilityTab
@@ -175,29 +246,39 @@ function AppContent() {
             scheduledEvents={publishedEvents}
             onViewSlot={(slot) => {
               slots.setActiveSlot(slot)
+
               setDashboardReturnScreen(embedded ? "admin" : "home")
+
               go("slot-serving")
             }}
             position={availability.timetablePosition}
             onPositionChange={availability.changePosition}
             onAddRecurring={() => {
               availability.startRecurring()
+
               setDashboardReturnScreen(embedded ? "admin" : "home")
+
               go("set-recurring")
             }}
             onAddOverride={() => {
               availability.startOverride()
+
               setDashboardReturnScreen(embedded ? "admin" : "home")
+
               go("add-override")
             }}
             onEditRecurring={(e) => {
               availability.startRecurring(e)
+
               setDashboardReturnScreen(embedded ? "admin" : "home")
+
               go("set-recurring")
             }}
             onEditOverride={(e) => {
               availability.startOverride(e)
+
               setDashboardReturnScreen(embedded ? "admin" : "home")
+
               go("add-override")
             }}
             onRemoveRecurring={availability.removeRecurring}
@@ -208,8 +289,21 @@ function AppContent() {
             slots={slots.slots}
             onSlotTap={(slot) => {
               setDashboardReturnScreen(embedded ? "admin" : "home")
+
               go(slots.openSlot(slot))
             }}
+          />
+        )}
+        {assistantOpen && (
+          <ScheduleAssistantPanel
+            facts={{
+              recurringAvailability: availability.recurringEntries,
+
+              overrides: availability.overrides,
+
+              slots: slots.slots,
+            }}
+            onClose={() => setAssistantOpen(false)}
           />
         )}
       </HomeScreen>
@@ -220,6 +314,7 @@ function AppContent() {
 
   switch (screen) {
     // ─── Welcome & Auth ───────────────────────────────────────────────────────
+
     case "welcome":
       return (
         <WelcomeScreen
@@ -243,6 +338,7 @@ function AppContent() {
           onSuccess={(loggedProfile) => {
             if (loggedProfile?.role === "admin" || isAdmin) {
               setAdminAuthenticated(true)
+
               go("admin")
             } else {
               go("home")
@@ -259,6 +355,7 @@ function AppContent() {
           onBack={() => go("welcome")}
           onAuthenticated={() => {
             setAdminAuthenticated(true)
+
             go("admin")
           }}
         />
@@ -276,6 +373,7 @@ function AppContent() {
           onSwitchToMember={() => go("home")}
           onLogout={() => {
             setAdminAuthenticated(false)
+
             reset()
           }}
         />
@@ -284,6 +382,7 @@ function AppContent() {
           onBack={() => go("welcome")}
           onAuthenticated={() => {
             setAdminAuthenticated(true)
+
             go("admin")
           }}
         />
@@ -298,14 +397,15 @@ function AppContent() {
           setLastName={wizard.setLastName}
           onContinue={() => {
             wizard.saveName()
+
             go("home")
           }}
         />
       )
 
-
     case "join-group": {
       const back = () => go(prevScreen)
+
       return isDesktop ? (
         <DesktopJoinGroupScreen
           data={wizard.form}
@@ -339,16 +439,19 @@ function AppContent() {
       )
 
     // ─── Home (holds the Availability and Open Slots tabs) ────────────────────
+
     case "home":
       return renderMemberDashboard()
 
     // ─── Availability ─────────────────────────────────────────────────────────
+
     case "set-recurring":
       return (
         <SetRecurringScreen
           initial={availability.editingRecurring}
           onSave={(entry) => {
             availability.saveRecurring(entry)
+
             go(dashboardReturnScreen)
           }}
           onBack={() => go(dashboardReturnScreen)}
@@ -361,6 +464,7 @@ function AppContent() {
           initial={availability.editingOverride}
           onSave={(entry) => {
             availability.saveOverride(entry)
+
             go(dashboardReturnScreen)
           }}
           onBack={() => go(dashboardReturnScreen)}
@@ -368,12 +472,14 @@ function AppContent() {
       )
 
     // ─── Open Slots ───────────────────────────────────────────────────────────
+
     case "slot-volunteer":
       return slots.activeSlot ? (
         <SlotVolunteerScreen
           slot={slots.activeSlot}
           onVolunteer={() => {
             slots.volunteer()
+
             go("slot-serving")
           }}
           onBack={() => go(dashboardReturnScreen)}
@@ -386,6 +492,7 @@ function AppContent() {
           slot={slots.activeSlot}
           onCancelSpot={() => {
             slots.cancelSpot()
+
             go(dashboardReturnScreen)
           }}
           onBack={() => go(dashboardReturnScreen)}

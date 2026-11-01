@@ -23,16 +23,22 @@ export const MINISTRIES: Ministry[] = [
 
   {
     id: "youth",
+
     name: "Youth Ministry",
+
     parish: "St. Joseph Parish",
+
     waiting: true,
   },
 ]
 
 function MinistrySheet({
   selected,
+
   onSelect,
+
   onClose,
+
   onJoin,
 }: {
   selected: Ministry
@@ -142,6 +148,8 @@ export function HomeScreen({
   isAdmin = false,
 
   onAdmin, // the open tab's content
+
+  onAssistant,
 }: {
   userName: string
 
@@ -164,6 +172,8 @@ export function HomeScreen({
   isAdmin?: boolean
 
   onAdmin?: () => void
+
+  onAssistant?: () => void
 }) {
   const [showMinistries, setShowMinistries] = useState(false)
 
@@ -248,6 +258,27 @@ export function HomeScreen({
             : `mx-auto px-4 py-5 ${wide ? "max-w-6xl" : "max-w-3xl"}`
         }
       >
+        {!embedded && onAssistant && (
+          <div className="mb-5">
+            <button
+              type="button"
+              onClick={onAssistant}
+              className="flex w-full items-center justify-between rounded-2xl border border-[#C9921A]/40 bg-[#FEF3DC] px-5 py-4 text-left shadow-sm transition-colors hover:bg-[#FBECCB]"
+            >
+              <span>
+                <span className="block text-sm font-bold uppercase tracking-wide text-[#8B6412]">
+                  Schedule assistant
+                </span>
+                <span className="mt-1 block text-base font-semibold text-[#1B3A6B]">
+                  Ask when you are free or find an open slot
+                </span>
+              </span>
+              <span className="text-2xl text-[#C9921A]" aria-hidden="true">
+                →
+              </span>
+            </button>
+          </div>
+        )}
         {children}
       </main>
 

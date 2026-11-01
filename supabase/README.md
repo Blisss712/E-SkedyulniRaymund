@@ -18,7 +18,7 @@ This application connects directly to Supabase without needing a Python or FastA
 Create a file named `.env.local` in the project root:
 
 ```env
-VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_URL=https://tbwabyzdojrvhcdyxrib.supabase.co
 VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
 ```
 
@@ -28,6 +28,25 @@ npm run dev
 ```
 
 The app will automatically detect the configuration and connect directly to your live database and authentication.
+
+## 2.1 Schedule assistant (optional)
+
+The member dashboard includes a schedule assistant that answers questions from the
+current availability and open-slot data. The browser never receives an LLM API key:
+the optional Supabase Edge Function formats a deterministic answer using a
+server-side key, while the app falls back to the same deterministic answer if the
+function is not deployed or configured.
+
+From the repository root, deploy the function with the Supabase CLI:
+
+```powershell
+supabase functions deploy schedule-assistant
+supabase secrets set GEMINI_API_KEY=your-server-side-key GEMINI_MODEL=gemini-2.5-flash
+```
+
+The function uses Google's Gemini `gemini-2.5-flash` model to format the
+deterministic answer. `GEMINI_API_KEY` must only be stored as a Supabase secret.
+Never add it to a `VITE_*` variable, log it, or commit it to the repository.
 
 ## 3. Creating an Admin Account
 
