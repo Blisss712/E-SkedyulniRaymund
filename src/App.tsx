@@ -93,6 +93,7 @@ export default function App() {
         tab={homeTab}
         onTabChange={setHomeTab}
         onJoin={() => go("join-group")}
+        onLogout={() => reset()}
         embedded={embedded}
       >
         {homeTab === "availability" ? (
@@ -100,6 +101,7 @@ export default function App() {
             recurringEntries={availability.recurringEntries}
             overrides={availability.overrides}
             slots={slots.slots}
+            scheduledEvents={[]}
             onViewSlot={slot => {
               slots.setActiveSlot(slot)
               setDashboardReturnScreen(embedded ? "admin" : "home")
