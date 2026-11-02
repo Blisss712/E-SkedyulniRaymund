@@ -10,12 +10,32 @@ export type UserProfile = {
   active: boolean
 }
 
+export type SocialProvider = "google" | "facebook" | "apple"
+
+/**
+ * Heuristic used to detect whether a signed-in user still lacks a real name
+ * (e.g. a first-time Google/Facebook/phone user whose profile only holds an
+ * email address or phone-number fallback).
+ */
+export function isPlaceholderName(name?: string | null): boolean {
+  const trimmed = (name ?? "").trim()
+  if (!trimmed) return true
+  const lower = trimmed.toLowerCase()
+  if (lower === "member" || lower === "administrator") return true
+  // Multi-word names ("Maria Santos") or capitalized single names ("John")
+  // are real names; all-lowercase single tokens usually come from an
+  // email/phone local-part fallback.
+  const hasSpaceOrCaps = /\s/.test(trimmed) || trimmed !== trimmed.toLowerCase()
+  return !hasSpaceOrCaps
+}
+
 export type AuthContextType = {
   user: User | null
   session: Session | null
   profile: UserProfile | null
   isAdmin: boolean
   loading: boolean
+  needsName: boolean
   signInWithEmail: (
     email: string,
     password: string,
@@ -35,5 +55,15 @@ export type AuthContextType = {
     password: string,
     fullName: string,
   ) => Promise<{ ok: boolean; error?: string }>
+  signInWithProvider: (
+    provider: SocialProvider,
+  ) => Promise<{ ok: boolean; error?: string }>
+  signInWithPhone: (
+    phone: string,
+  ) => Promise<{ ok: boolean; error?: string; message?: string }>
+  verifyPhoneOtp: (
+    phone: string,
+    token: string,
+  ) => Promise<{ ok: boolean; error?: string; profile?: UserProfile }>
   signOut: () => Promise<void>
 }

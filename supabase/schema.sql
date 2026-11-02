@@ -213,7 +213,12 @@ BEGIN
     VALUES (
         NEW.id,
         NEW.email,
-        COALESCE(NEW.raw_user_meta_data->>'full_name', split_part(NEW.email, '@', 1)),
+        COALESCE(
+          NULLIF(TRIM(NEW.raw_user_meta_data->>'full_name'), ''),
+          NULLIF(TRIM(NEW.raw_user_meta_data->>'name'), ''),
+          NULLIF(TRIM(COALESCE(NEW.raw_user_meta_data->>'first_name', '') || ' ' || COALESCE(NEW.raw_user_meta_data->>'last_name', '')), ''),
+          TRIM(split_part(NEW.email, '@', 1))
+        ),
         TRUE
     )
     ON CONFLICT (user_id) DO UPDATE
