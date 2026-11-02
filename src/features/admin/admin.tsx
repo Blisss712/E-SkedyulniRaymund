@@ -5,13 +5,21 @@ import type {
   AdminEvent,
   EventDraft,
   EventStatus,
+  JoinRequest,
+  JoinRequestStatus,
   Organization,
   OrganizationDraft,
   OrganizationStatus,
   Recurrence,
 } from "./types"
 
-export type AdminSection = "dashboard" | "organizations" | "events"
+export type AdminSection = "dashboard" | "organizations" | "events" | "requests"
+const ADMIN_SECTIONS: { value: AdminSection; label: string }[] = [
+  { value: "dashboard", label: "Dashboard" },
+  { value: "organizations", label: "Organizations" },
+  { value: "events", label: "Events" },
+  { value: "requests", label: "Join requests" },
+]
 type AdminView =
   | { name: "section"; section: AdminSection }
   | { name: "organization"; id: string }
@@ -57,6 +65,15 @@ function formatDateTime(value: string) {
   }).format(new Date(value))
 }
 
+function splitDateTime(value: string): [string, string] {
+  const [date = "", time = ""] = value.split("T")
+  return [date, time.slice(0, 5)]
+}
+
+function combineDateTime(date: string, time: string) {
+  return date && time ? `${date}T${time}` : ""
+}
+
 function StatusBadge({ status }: { status: OrganizationStatus | EventStatus }) {
   const styles: Record<OrganizationStatus | EventStatus, string> = {
     active: "bg-green-light text-green",
@@ -65,6 +82,20 @@ function StatusBadge({ status }: { status: OrganizationStatus | EventStatus }) {
     draft: "bg-gold-light text-gold",
     cancelled: "bg-red-light text-red",
     completed: "bg-navy-soft text-navy",
+  }
+
+  return (
+    <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${styles[status]}`}>
+      {status}
+    </span>
+  )
+}
+
+function RequestStatusBadge({ status }: { status: JoinRequestStatus }) {
+  const styles: Record<JoinRequestStatus, string> = {
+    pending: "bg-gold-light text-gold",
+    approved: "bg-green-light text-green",
+    rejected: "bg-red-light text-red",
   }
   return (
     <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${styles[status]}`}>
@@ -127,10 +158,9 @@ function EmptyState({ title, detail, action }: { title: string; detail: string; 
   )
 }
 
-function Dashboard({ admin, onEvents, memberDashboard }: {
+function Dashboard({ admin, onEvents }: {
   admin: ReturnType<typeof useAdmin>
   onEvents: () => void
-  memberDashboard: React.ReactNode
 }) {
   const nextEvents = admin.events
     .filter(event => event.status === "published")
@@ -141,7 +171,7 @@ function Dashboard({ admin, onEvents, memberDashboard }: {
     <div className="space-y-7">
       <AdminHeader
         title="Dashboard"
-        description="Manage your organizations and events, and join upcoming schedules."
+        description="Manage your organizations and events from one workspace."
       />
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <MetricCard label="Active organizations" value={admin.metrics.activeOrganizations} detail="Ready to publish events" />
@@ -172,13 +202,76 @@ function Dashboard({ admin, onEvents, memberDashboard }: {
           })}
         </div>
       </div>
-      <section className="space-y-4">
-        <div>
-          <h2 className="text-xl font-bold text-navy">Join a schedule</h2>
-          <p className="mt-1 text-sm text-muted">Check your availability or volunteer for an open slot.</p>
+    </div>
+  )
+}
+
+function JoinRequestList({ requests, onApprove, onReject }: {
+  requests: JoinRequest[]
+  onApprove: (id: string) => void
+  onReject: (id: string) => void
+}) {
+  const [filter, setFilter] = useState<JoinRequestStatus | "all">("pending")
+  const filteredRequests = requests.filter(request => filter === "all" || request.status === filter)
+
+  return (
+    <div className="space-y-6">
+      <AdminHeader
+        title="Member join requests"
+        description="Review requests submitted using organization join codes."
+      />
+      <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
+        <p className="mb-2 text-sm font-semibold text-text">Filter requests</p>
+        <div className="flex flex-wrap rounded-xl bg-bg p-1">
+          {(["pending", "approved", "rejected", "all"] as const).map(value => (
+            <Button
+              key={value}
+              variant={filter === value ? "tabActive" : "tabInactive"}
+              size="compact"
+              fullWidth={false}
+              onClick={() => setFilter(value)}
+              className="capitalize"
+            >
+              {value}
+            </Button>
+          ))}
         </div>
-      {memberDashboard}
-      </section>
+      </div>
+      {!filteredRequests.length ? (
+        <EmptyState
+          title={requests.length ? "No matching requests" : "No join requests"}
+          detail={requests.length ? "There are no requests in this status." : "New membership requests will appear here for review."}
+        />
+      ) : (
+        <section className="space-y-3">
+          <div>
+            <p className="text-xl font-bold text-text">{filter === "all" ? "All requests" : `${filter[0].toUpperCase()}${filter.slice(1)} requests`}</p>
+            <p className="mt-1 text-sm text-muted">
+              {filter === "pending" ? "Approve or reject requests waiting for an administrator decision." : "Review the status of submitted membership requests."}
+            </p>
+          </div>
+          {filteredRequests.map(request => (
+              <div key={request.id} className="rounded-2xl border border-gold/30 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <p className="text-lg font-bold text-text">{request.memberName}</p>
+                      <RequestStatusBadge status={request.status} />
+                    </div>
+                    <p className="mt-2 text-sm text-muted">Requested to join <span className="font-semibold text-text">{request.groupName}</span> ({request.groupCode})</p>
+                    <p className="mt-1 text-xs text-muted">Submitted {formatDateTime(request.requestedAt)}</p>
+                  </div>
+                  {request.status === "pending" && (
+                    <div className="flex gap-2">
+                      <Button size="compact" fullWidth={false} onClick={() => onApprove(request.id)}>Approve</Button>
+                      <Button variant="danger" size="compact" fullWidth={false} onClick={() => onReject(request.id)}>Reject</Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+        </section>
+      )}
     </div>
   )
 }
@@ -399,7 +492,7 @@ function OrganizationForm({ initial, onCancel, onSave }: {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <Button variant="ghost" size="compact" fullWidth={false} onClick={onCancel}>Cancel and go back</Button>
+      <Button variant="ghost" size="compact" fullWidth={false} onClick={onCancel}>Back to Organizations</Button>
       <AdminHeader
         title={initial ? "Edit organization" : "Create organization"}
         description="Keep the profile focused on the information needed to manage schedules and communication."
@@ -531,12 +624,38 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved }: {
   const activeOrganizations = admin.organizations.filter(organization => organization.status === "active")
   const defaultOrganization = organizationId || initial?.organizationId || activeOrganizations[0]?.id || ""
   const [form, setForm] = useState<EventDraft>(initial ?? emptyEvent(defaultOrganization))
+  const [startDate, startTime] = splitDateTime(form.startsAt)
+  const [endDate, endTime] = splitDateTime(form.endsAt)
+  const [selectedStartDate, setSelectedStartDate] = useState(startDate)
+  const [selectedStartTime, setSelectedStartTime] = useState(startTime)
+  const [selectedEndDate, setSelectedEndDate] = useState(endDate)
+  const [selectedEndTime, setSelectedEndTime] = useState(endTime)
   const [error, setError] = useState("")
   const conflict = admin.findConflict(form, initial?.id)
 
   function update<K extends keyof EventDraft>(field: K, value: EventDraft[K]) {
     setForm(current => ({ ...current, [field]: value }))
     setError("")
+  }
+
+  function updateStartDate(value: string) {
+    setSelectedStartDate(value)
+    update("startsAt", combineDateTime(value, selectedStartTime))
+  }
+
+  function updateStartTime(value: string) {
+    setSelectedStartTime(value)
+    update("startsAt", combineDateTime(selectedStartDate, value))
+  }
+
+  function updateEndDate(value: string) {
+    setSelectedEndDate(value)
+    update("endsAt", combineDateTime(value, selectedEndTime))
+  }
+
+  function updateEndTime(value: string) {
+    setSelectedEndTime(value)
+    update("endsAt", combineDateTime(selectedEndDate, value))
   }
 
   function submit(status: "draft" | "published") {
@@ -562,7 +681,7 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved }: {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <Button variant="ghost" size="compact" fullWidth={false} onClick={onCancel}>Cancel and go back</Button>
+      <Button variant="ghost" size="compact" fullWidth={false} onClick={onCancel}>Back to Events</Button>
       <AdminHeader
         title={initial ? "Edit event" : "Create event"}
         description="Add the core schedule, location, registration, and publishing details."
@@ -592,8 +711,14 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved }: {
           <div className="sm:col-span-2">
             <InputField id="event-description" label="Short description" value={form.description} onChange={value => update("description", value)} placeholder="Purpose or helpful attendee details" />
           </div>
-          <InputField id="event-start" type="datetime-local" label="Starts" value={form.startsAt} onChange={value => update("startsAt", value)} />
-          <InputField id="event-end" type="datetime-local" label="Ends" value={form.endsAt} onChange={value => update("endsAt", value)} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <InputField id="event-start-date" type="date" label="Start date" value={selectedStartDate} onChange={updateStartDate} />
+            <InputField id="event-start-time" type="time" label="Start time" value={selectedStartTime} onChange={updateStartTime} />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <InputField id="event-end-date" type="date" label="End date" value={selectedEndDate} onChange={updateEndDate} />
+            <InputField id="event-end-time" type="time" label="End time" value={selectedEndTime} onChange={updateEndTime} />
+          </div>
           <InputField id="event-location" label="Location" value={form.location} onChange={value => update("location", value)} placeholder="Venue or meeting link" />
           <InputField id="event-capacity" type="number" label="Maximum attendees" value={String(form.capacity)} onChange={value => update("capacity", Number(value))} />
           <InputField id="registration-deadline" type="datetime-local" label="Registration deadline" value={form.registrationDeadline} onChange={value => update("registrationDeadline", value)} helper="Optional. Must be before the event starts." />
@@ -640,9 +765,11 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved }: {
   )
 }
 
-export function AdminScreen({ onLogout, memberDashboard }: {
+export function AdminScreen({ onLogout, requests, onApproveRequest, onRejectRequest }: {
   onLogout: () => void
-  memberDashboard: React.ReactNode
+  requests: JoinRequest[]
+  onApproveRequest: (id: string) => void
+  onRejectRequest: (id: string) => void
 }) {
   const admin = useAdmin()
   const [view, setView] = useState<AdminView>({ name: "section", section: "dashboard" })
@@ -694,15 +821,22 @@ export function AdminScreen({ onLogout, memberDashboard }: {
         onSaved={() => openSection("events")}
       />
     )
-  } else if (view.section === "dashboard") {
+  } else if (view.name === "section" && view.section === "requests") {
+    content = (
+      <JoinRequestList
+        requests={requests}
+        onApprove={onApproveRequest}
+        onReject={onRejectRequest}
+      />
+    )
+  } else if (view.name === "section" && view.section === "dashboard") {
     content = (
       <Dashboard
         admin={admin}
         onEvents={() => openSection("events")}
-        memberDashboard={memberDashboard}
       />
     )
-  } else if (view.section === "organizations") {
+  } else if (view.name === "section" && view.section === "organizations") {
     content = (
       <OrganizationList
         admin={admin}
@@ -733,15 +867,15 @@ export function AdminScreen({ onLogout, memberDashboard }: {
           <div className="px-3"><AdminBrand /></div>
           <div className="mx-3 mt-6 h-px bg-white/15" />
           <div className="mt-9 flex flex-1 flex-col gap-2">
-            {(["dashboard", "organizations", "events"] as AdminSection[]).map(section => (
+            {ADMIN_SECTIONS.map(({ value, label }) => (
               <Button
-                key={section}
+                key={value}
                 variant="ghost"
                 fullWidth
-                onClick={() => openSection(section)}
-                className={`justify-start ${activeSection === section ? "bg-white text-navy" : "text-white hover:bg-white/10"}`}
+                onClick={() => openSection(value)}
+                className={`justify-start ${activeSection === value ? "bg-white text-navy" : "text-white hover:bg-white/10"}`}
               >
-                {section}
+                {label}
               </Button>
             ))}
           </div>
@@ -755,22 +889,22 @@ export function AdminScreen({ onLogout, memberDashboard }: {
           <div className="mx-auto max-w-6xl">{content}</div>
         </main>
       </div>
-      <nav className="fixed bottom-3 left-3 right-3 z-40 grid grid-cols-3 gap-1 rounded-3xl border border-white/70 bg-white/90 p-2 shadow-xl backdrop-blur-xl backdrop-saturate-150 lg:hidden">
-        {(["dashboard", "organizations", "events"] as AdminSection[]).map(section => (
+      <nav className="fixed bottom-3 left-3 right-3 z-40 grid grid-cols-4 gap-1 rounded-3xl border border-white/70 bg-white/90 p-2 shadow-xl backdrop-blur-xl backdrop-saturate-150 lg:hidden">
+        {ADMIN_SECTIONS.map(({ value, label }) => (
           <Button
-            key={section}
+            key={value}
             variant="ghost"
             size="compact"
             fullWidth
-            onClick={() => openSection(section)}
-            ariaPressed={activeSection === section}
-            className={`min-h-12 rounded-2xl px-1 text-xs capitalize sm:px-2 sm:text-sm ${
-              activeSection === section
+            onClick={() => openSection(value)}
+            ariaPressed={activeSection === value}
+            className={`min-h-12 rounded-2xl px-1 text-xs sm:px-2 sm:text-sm ${
+              activeSection === value
                 ? "bg-navy/10 text-navy shadow-sm ring-1 ring-navy/15"
                 : "text-muted hover:bg-bg hover:text-navy"
             }`}
           >
-            {section}
+            {label}
           </Button>
         ))}
       </nav>

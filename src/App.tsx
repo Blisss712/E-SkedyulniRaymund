@@ -18,6 +18,7 @@ import { SlotList, SlotVolunteerScreen, SlotServingScreen, SlotFilledScreen } fr
 import { useSlots } from "./features/slots/useSlots"
 import { AdminScreen } from "./features/admin/admin"
 import { AdminLoginScreen } from "./features/admin/login"
+import { useJoinRequests } from "./features/admin/useJoinRequests"
 
 export default function App() {
   const isDesktop = useIsDesktop()
@@ -32,6 +33,8 @@ export default function App() {
   const wizard = useWizard()
   const availability = useAvailability()
   const slots = useSlots()
+  const joinRequests = useJoinRequests()
+  const [activeRequestId, setActiveRequestId] = useState("")
 
   function go(to: Screen) {
     setPrevScreen(screen)
@@ -40,6 +43,7 @@ export default function App() {
 
   function reset() {
     wizard.reset()
+    setActiveRequestId("")
     setHomeTab("availability")
     setMinistry(MINISTRIES[0])
     availability.resetPosition()
@@ -131,7 +135,9 @@ export default function App() {
     case "admin":
       return adminAuthenticated ? (
         <AdminScreen
-          memberDashboard={renderMemberDashboard(true)}
+          requests={joinRequests.requests}
+          onApproveRequest={joinRequests.approveRequest}
+          onRejectRequest={joinRequests.rejectRequest}
           onLogout={() => {
             setAdminAuthenticated(false)
             go("welcome")
@@ -165,17 +171,31 @@ export default function App() {
       // Back returns to wherever the member came from: name entry during onboarding, or Home via "+ Join Another Ministry".
       const back = () => go(prevScreen)
       return isDesktop ? (
-        <DesktopJoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={() => go("pending")} onBack={back} />
+        <DesktopJoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={() => {
+          setActiveRequestId(joinRequests.createRequest({
+            memberName: wizard.form.name || "Member",
+            groupCode: wizard.form.groupCode,
+            groupName: wizard.form.groupName,
+          }))
+          go("pending")
+        }} onBack={back} />
       ) : (
-        <JoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={() => go("pending")} onBack={back} />
+        <JoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={() => {
+          setActiveRequestId(joinRequests.createRequest({
+            memberName: wizard.form.name || "Member",
+            groupCode: wizard.form.groupCode,
+            groupName: wizard.form.groupName,
+          }))
+          go("pending")
+        }} onBack={back} />
       )
     }
 
     case "pending":
       return isDesktop ? (
-        <DesktopPendingScreen data={wizard.form} onBack={reset} onApproved={() => go("home")} />
+        <DesktopPendingScreen data={wizard.form} status={joinRequests.requests.find(request => request.id === activeRequestId)?.status ?? "pending"} onBack={reset} onApproved={() => go("home")} />
       ) : (
-        <PendingScreen data={wizard.form} onBack={reset} onApproved={() => go("home")} />
+        <PendingScreen data={wizard.form} status={joinRequests.requests.find(request => request.id === activeRequestId)?.status ?? "pending"} onBack={reset} onApproved={() => go("home")} />
       )
 
     // ─── Home (holds the Availability and Open Slots tabs) ────────────────────

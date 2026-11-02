@@ -2,6 +2,7 @@ import { useState } from "react"
 import type { FormData } from "./types"
 import { Button, InputField, Card, BackButton, ClockIcon } from "../../shared/ui"
 import { EXAMPLE_GROUPS, PENDING_STEPS } from "./data"
+import type { JoinRequestStatus } from "../admin/types"
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
@@ -134,9 +135,11 @@ export function DesktopJoinGroupScreen({ data, setData, onJoin, onBack }: {
   )
 }
 
-export function DesktopPendingScreen({ data, onBack, onApproved }: {
-  data: FormData; onBack: () => void; onApproved: () => void
+export function DesktopPendingScreen({ data, status, onBack, onApproved }: {
+  data: FormData; status: JoinRequestStatus; onBack: () => void; onApproved: () => void
 }) {
+  const isApproved = status === "approved"
+  const isRejected = status === "rejected"
   return (
     <div className="flex min-h-screen">
       <DesktopBrandPanel />
@@ -144,16 +147,24 @@ export function DesktopPendingScreen({ data, onBack, onApproved }: {
         <div className="flex flex-col items-center gap-7">
           <ClockIcon />
           <div className="text-center">
-            <h2 className="text-2xl font-bold text-[#C9921A] mb-2">Your request is on its way!</h2>
+            <h2 className={`text-2xl font-bold mb-2 ${isApproved ? "text-[#237A57]" : isRejected ? "text-[#C0392B]" : "text-[#C9921A]"}`}>
+              {isApproved ? "Your request was approved!" : isRejected ? "Your request was not approved" : "Your request is on its way!"}
+            </h2>
             <p className="text-[#1A202C] text-[17px] leading-relaxed">You've asked to join the <strong>{data.groupName}</strong> group.</p>
           </div>
           <div className="bg-[#FEF3DC] border border-[#C9921A]/30 rounded-2xl p-6 w-full">
-            <p className="text-[#1A202C] text-[17px] leading-relaxed">The group leader needs to approve your request. This usually happens within 1–2 days.</p>
+            <p className="text-[#1A202C] text-[17px] leading-relaxed">
+              {isApproved
+                ? "You can now continue to your ministry dashboard."
+                : isRejected
+                  ? "You can start over and submit a new request if you believe this was a mistake."
+                  : "The group leader needs to approve your request. This usually happens within 1–2 days."}
+            </p>
           </div>
           <div className="w-full bg-white border border-[#D1D9E8] rounded-xl p-4">
             <p className="text-[#64748B] text-[15px] font-semibold uppercase tracking-wide mb-2">What's next?</p>
             <ol className="flex flex-col gap-2">
-              {PENDING_STEPS.map((s, i) => (
+              {(isApproved ? ["Your request was reviewed by an administrator.", "You can continue to your ministry dashboard."] : isRejected ? ["Your request was reviewed by an administrator.", "Contact your group leader if you need more information."] : PENDING_STEPS).map((s, i) => (
                 <li key={i} className="flex items-start gap-3 text-[15px] text-[#1A202C]">
                   <span className="min-w-[24px] h-6 rounded-full bg-[#C9921A]/15 text-[#C9921A] font-bold text-[13px] flex items-center justify-center mt-0.5">{i + 1}</span>{s}
                 </li>
@@ -161,8 +172,7 @@ export function DesktopPendingScreen({ data, onBack, onApproved }: {
             </ol>
           </div>
           <div className="w-full border-t border-[#D1D9E8] pt-5 flex flex-col gap-3">
-            <p className="text-[#94A3B8] text-[14px] text-center">(Demo only) Simulate what happens after the group leader approves you:</p>
-            <Button onClick={onApproved} variant="primary">I've Been Approved — Continue</Button>
+            {!isRejected && <Button onClick={onApproved} variant="primary" disabled={!isApproved}>{isApproved ? "Continue to dashboard" : "Awaiting approval"}</Button>}
             <Button onClick={onBack} variant="ghost">← Start Over</Button>
           </div>
         </div>

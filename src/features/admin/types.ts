@@ -36,3 +36,15 @@ export type AdminEvent = {
 }
 
 export type EventDraft = Omit<AdminEvent, "id" | "createdAt">
+
+export type JoinRequestStatus = "pending" | "approved" | "rejected"
+
+export type JoinRequest = {
+  id: string
+  memberName: string
+  groupCode: string
+  groupName: string
+  status: JoinRequestStatus
+  requestedAt: string
+  reviewedAt?: string
+}
