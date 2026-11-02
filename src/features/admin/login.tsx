@@ -1,28 +1,44 @@
 import { useState } from "react"
 import { BackButton, Button, Card, InputField, Logo, ScreenShell } from "../../shared/ui"
+import { isAdminApiConfigured, loginAdmin } from "./api"
 
-const ADMIN_USERNAME = "admin"
-const ADMIN_PASSWORD = "admin123"
+const DEMO_USERNAME = "admin"
+const DEMO_PASSWORD = "admin123"
 
 export function AdminLoginScreen({ onBack, onAuthenticated }: {
   onBack: () => void
-  onAuthenticated: () => void
+  onAuthenticated: (token?: string) => void
 }) {
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
 
-  function signIn() {
+  async function signIn() {
     if (!username.trim() || !password) {
       setError("Enter your username and password.")
       return
     }
-    if (username.trim() !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
+    setLoading(true)
+    if (isAdminApiConfigured) {
+      try {
+        const result = await loginAdmin(username.trim(), password)
+        setError("")
+        onAuthenticated(result.access_token)
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "The username or password is incorrect.")
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+    if (username.trim() !== DEMO_USERNAME || password !== DEMO_PASSWORD) {
       setError("The username or password is incorrect.")
       return
     }
     setError("")
     onAuthenticated()
+    setLoading(false)
   }
 
   return (
@@ -68,7 +84,7 @@ export function AdminLoginScreen({ onBack, onAuthenticated }: {
               {error}
             </p>
           )}
-          <Button onClick={signIn}>Sign in to admin</Button>
+          <Button onClick={() => void signIn()} disabled={loading}>{loading ? "Signing in..." : "Sign in to admin"}</Button>
         </div>
       </Card>
       <p className="mt-5 text-center text-sm leading-relaxed text-muted">

@@ -886,7 +886,14 @@ export function AdminScreen({ onLogout, requests, onApproveRequest, onRejectRequ
           </div>
         </aside>
         <main className="min-w-0 flex-1 px-4 pb-28 pt-6 sm:px-7 lg:px-10 lg:py-9">
-          <div className="mx-auto max-w-6xl">{content}</div>
+          <div className="mx-auto max-w-6xl">
+            {admin.error && (
+              <div role="alert" className="mb-5 rounded-xl border border-red/30 bg-red-light px-4 py-3 text-sm text-red">
+                {admin.error}
+              </div>
+            )}
+            {content}
+          </div>
         </main>
       </div>
       <nav className="fixed bottom-3 left-3 right-3 z-40 grid grid-cols-4 gap-1 rounded-3xl border border-white/70 bg-white/90 p-2 shadow-xl backdrop-blur-xl backdrop-saturate-150 lg:hidden">

@@ -19,6 +19,7 @@ import { useSlots } from "./features/slots/useSlots"
 import { AdminScreen } from "./features/admin/admin"
 import { AdminLoginScreen } from "./features/admin/login"
 import { useJoinRequests } from "./features/admin/useJoinRequests"
+import { logoutAdmin } from "./features/admin/api"
 
 export default function App() {
   const isDesktop = useIsDesktop()
@@ -140,6 +141,7 @@ export default function App() {
           onRejectRequest={joinRequests.rejectRequest}
           onLogout={() => {
             setAdminAuthenticated(false)
+            void logoutAdmin()
             go("welcome")
           }}
         />
