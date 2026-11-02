@@ -42,7 +42,10 @@ def create_app() -> FastAPI:
             "databaseConfigured": bool(settings.database_url),
         }
 
-    app.include_router(api_router)
+    # FastAPI's current router implementation wraps nested routers as an
+    # internal route object; append the already-prefixed endpoint routes so
+    # OpenAPI and request dispatch see every admin endpoint directly.
+    app.router.routes.extend(api_router.routes)
     return app
 
 app = create_app()

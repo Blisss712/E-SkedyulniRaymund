@@ -82,6 +82,18 @@ CREATE TABLE IF NOT EXISTS public.organization_members (
     PRIMARY KEY (organization_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS public.organization_join_requests (
+    id VARCHAR(40) PRIMARY KEY,
+    member_name VARCHAR(150) NOT NULL,
+    group_code VARCHAR(80) NOT NULL,
+    group_name VARCHAR(150) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected')),
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reviewed_at TIMESTAMPTZ,
+    reviewed_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_admin_profiles_username
     ON public.admin_profiles(username);
 
@@ -99,6 +111,12 @@ CREATE INDEX IF NOT EXISTS idx_events_status
 
 CREATE INDEX IF NOT EXISTS idx_organization_members_user
     ON public.organization_members(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_join_requests_status
+    ON public.organization_join_requests(status);
+
+CREATE INDEX IF NOT EXISTS idx_join_requests_requested_at
+    ON public.organization_join_requests(requested_at DESC);
 
 CREATE OR REPLACE FUNCTION public.is_admin(uid UUID)
 RETURNS BOOLEAN
@@ -120,6 +138,26 @@ ALTER TABLE public.admin_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organization_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.organization_join_requests ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS public_create_join_requests
+    ON public.organization_join_requests;
+
+CREATE POLICY public_create_join_requests
+ON public.organization_join_requests
+FOR INSERT
+TO anon, authenticated
+WITH CHECK (TRUE);
+
+DROP POLICY IF EXISTS admin_manage_join_requests
+    ON public.organization_join_requests;
+
+CREATE POLICY admin_manage_join_requests
+ON public.organization_join_requests
+FOR ALL
+TO authenticated
+USING (public.is_admin(auth.uid()))
+WITH CHECK (public.is_admin(auth.uid()));
 
 DROP POLICY IF EXISTS admin_profile_self_read
     ON public.admin_profiles;

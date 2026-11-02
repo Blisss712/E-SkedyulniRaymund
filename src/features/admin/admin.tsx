@@ -765,9 +765,10 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved }: {
   )
 }
 
-export function AdminScreen({ onLogout, requests, onApproveRequest, onRejectRequest }: {
+export function AdminScreen({ onLogout, requests, requestError, onApproveRequest, onRejectRequest }: {
   onLogout: () => void
   requests: JoinRequest[]
+  requestError?: string
   onApproveRequest: (id: string) => void
   onRejectRequest: (id: string) => void
 }) {
@@ -887,9 +888,9 @@ export function AdminScreen({ onLogout, requests, onApproveRequest, onRejectRequ
         </aside>
         <main className="min-w-0 flex-1 px-4 pb-28 pt-6 sm:px-7 lg:px-10 lg:py-9">
           <div className="mx-auto max-w-6xl">
-            {admin.error && (
+            {(admin.error || requestError) && (
               <div role="alert" className="mb-5 rounded-xl border border-red/30 bg-red-light px-4 py-3 text-sm text-red">
-                {admin.error}
+                {admin.error || requestError}
               </div>
             )}
             {content}

@@ -50,6 +50,10 @@ The admin API includes:
 - `GET /admin/dashboard`
 - Organization CRUD and status management under `/admin/organizations`
 - Event CRUD, duplication, cancellation, and conflict checks under `/admin/events`
+- Member join requests:
+  - `POST /join-requests` for member submissions
+  - `GET /admin/join-requests` for the admin queue
+  - `PATCH /admin/join-requests/{request_id}` to approve or reject
 
 Protected endpoints require `Authorization: Bearer <Supabase access token>`.
 

@@ -54,6 +54,29 @@ export async function loadAdminData() {
   return { organizations, events }
 }
 
+export async function loadJoinRequests() {
+  return request<JoinRequest[]>("/admin/join-requests")
+}
+
+export async function createJoinRequest(input: Omit<JoinRequest, "id" | "status" | "requestedAt">) {
+  return request<JoinRequest>("/join-requests", {
+    method: "POST",
+    body: JSON.stringify(input),
+    token: "",
+  })
+}
+
+export async function loadJoinRequest(id: string) {
+  return request<JoinRequest>(`/join-requests/${id}`, { token: "" })
+}
+
+export async function updateJoinRequest(id: string, status: "approved" | "rejected") {
+  return request<JoinRequest>(`/admin/join-requests/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  })
+}
+
 export const adminApi = {
   createOrganization: (draft: OrganizationDraft) =>
     request<Organization>("/admin/organizations", { method: "POST", body: JSON.stringify(draft) }),

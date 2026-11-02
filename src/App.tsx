@@ -37,6 +37,16 @@ export default function App() {
   const joinRequests = useJoinRequests()
   const [activeRequestId, setActiveRequestId] = useState("")
 
+  useEffect(() => {
+    if (adminAuthenticated) void joinRequests.refresh()
+  }, [adminAuthenticated])
+
+  useEffect(() => {
+    if (screen !== "pending" || !activeRequestId || activeRequestId.startsWith("request-")) return
+    const timer = window.setInterval(() => void joinRequests.refreshRequest(activeRequestId), 3000)
+    return () => window.clearInterval(timer)
+  }, [screen, activeRequestId])
+
   function go(to: Screen) {
     setPrevScreen(screen)
     setScreen(to)
@@ -137,6 +147,7 @@ export default function App() {
       return adminAuthenticated ? (
         <AdminScreen
           requests={joinRequests.requests}
+          requestError={joinRequests.apiError}
           onApproveRequest={joinRequests.approveRequest}
           onRejectRequest={joinRequests.rejectRequest}
           onLogout={() => {
@@ -172,24 +183,19 @@ export default function App() {
     case "join-group": {
       // Back returns to wherever the member came from: name entry during onboarding, or Home via "+ Join Another Ministry".
       const back = () => go(prevScreen)
+      const submitJoinRequest = async () => {
+        const requestId = await joinRequests.createRequest({
+            memberName: wizard.form.name || "Member",
+            groupCode: wizard.form.groupCode,
+            groupName: wizard.form.groupName,
+        })
+        setActiveRequestId(requestId)
+        go("pending")
+      }
       return isDesktop ? (
-        <DesktopJoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={() => {
-          setActiveRequestId(joinRequests.createRequest({
-            memberName: wizard.form.name || "Member",
-            groupCode: wizard.form.groupCode,
-            groupName: wizard.form.groupName,
-          }))
-          go("pending")
-        }} onBack={back} />
+        <DesktopJoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={submitJoinRequest} onBack={back} />
       ) : (
-        <JoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={() => {
-          setActiveRequestId(joinRequests.createRequest({
-            memberName: wizard.form.name || "Member",
-            groupCode: wizard.form.groupCode,
-            groupName: wizard.form.groupName,
-          }))
-          go("pending")
-        }} onBack={back} />
+        <JoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={submitJoinRequest} onBack={back} />
       )
     }
 
