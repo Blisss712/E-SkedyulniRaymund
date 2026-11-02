@@ -7,9 +7,38 @@ import {
 } from "react"
 import type { Session, User } from "@supabase/supabase-js"
 import { supabase, isSupabaseConfigured } from "../../lib/supabase"
-import type { AuthContextType, UserProfile } from "./types"
+import {
+  isPlaceholderName,
+  type SocialProvider,
+  type AuthContextType,
+  type UserProfile,
+} from "./types"
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+
+function getProviderDisplayName(user: User): string | undefined {
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>
+  const direct = meta.full_name ?? meta.name ?? meta.given_name
+  const value = Array.isArray(direct) ? undefined : direct
+  if (typeof value === "string" && value.trim()) {
+    return value.trim()
+  }
+  const firstName =
+    typeof meta.first_name === "string" ? (meta.first_name as string).trim() : ""
+  const lastName =
+    typeof meta.last_name === "string" ? (meta.last_name as string).trim() : ""
+  if (firstName || lastName) {
+    return `${firstName} ${lastName}`.trim()
+  }
+  return undefined
+}
+
+function normalizePhone(phone: string): string {
+  const cleaned = phone.replace(/[\s-]/g, "")
+  if (!cleaned) return ""
+  const withPlus = cleaned.startsWith("+") ? cleaned : `+${cleaned}`
+  return withPlus
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -94,8 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(initialSession)
       setUser(initialSession?.user ?? null)
       if (initialSession?.user) {
-        const metaName = initialSession.user.user_metadata
-          ?.full_name as string | undefined
+        const metaName = getProviderDisplayName(initialSession.user)
         fetchProfile(
           initialSession.user.id,
           initialSession.user.email || "",
@@ -112,8 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(newSession)
       setUser(newSession?.user ?? null)
       if (newSession?.user) {
-        const metaName = newSession.user.user_metadata
-          ?.full_name as string | undefined
+        const metaName = getProviderDisplayName(newSession.user)
         await fetchProfile(
           newSession.user.id,
           newSession.user.email || "",
@@ -153,8 +180,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       let userProfile: UserProfile | null = null
       if (data.user) {
-        const metaName = data.user.user_metadata
-          ?.full_name as string | undefined
+        const metaName = getProviderDisplayName(data.user)
         userProfile =
           (await fetchProfile(data.user.id, data.user.email || "", metaName)) ||
           null
@@ -231,7 +257,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       // 4. Verify admin role
-      const metaName = data.user.user_metadata?.full_name as string | undefined
+      const metaName = getProviderDisplayName(data.user)
       const resolvedProfile = await fetchProfile(
         data.user.id,
         data.user.email || emailToUse,
@@ -313,6 +339,118 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  async function signInWithProvider(
+    provider: SocialProvider,
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (!isSupabaseConfigured) {
+      return {
+        ok: false,
+        error: "Authentication is not configured. Add the Supabase environment variables.",
+      }
+    }
+
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: window.location.origin,
+        },
+      })
+
+      if (error) {
+        return { ok: false, error: error.message }
+      }
+
+      return { ok: true }
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "An unexpected error occurred.",
+      }
+    }
+  }
+
+  async function signInWithPhone(
+    phone: string,
+  ): Promise<{ ok: boolean; error?: string; message?: string }> {
+    if (!isSupabaseConfigured) {
+      return {
+        ok: false,
+        error: "Authentication is not configured. Add the Supabase environment variables.",
+      }
+    }
+
+    const normalized = normalizePhone(phone)
+    if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
+      return {
+        ok: false,
+        error: "Enter a valid phone number with country code, e.g. +63 917 123 4567.",
+      }
+    }
+
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        phone: normalized,
+        options: {
+          shouldCreateUser: true,
+        },
+      })
+
+      if (error) {
+        return { ok: false, error: error.message }
+      }
+
+      return { ok: true, message: "Verification code sent." }
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "An unexpected error occurred.",
+      }
+    }
+  }
+
+  async function verifyPhoneOtp(
+    phone: string,
+    token: string,
+  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
+    if (!isSupabaseConfigured) {
+      return {
+        ok: false,
+        error: "Authentication is not configured. Add the Supabase environment variables.",
+      }
+    }
+
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        type: "sms",
+        phone: normalizePhone(phone),
+        token: token.trim(),
+      })
+
+      if (error) {
+        return { ok: false, error: error.message }
+      }
+
+      if (!data.user) {
+        return {
+          ok: false,
+          error: "Unable to verify the code. Please try again.",
+        }
+      }
+
+      const metaName = getProviderDisplayName(data.user)
+      const userProfile =
+        (await fetchProfile(data.user.id, data.user.email || "", metaName)) || null
+
+      return { ok: true, profile: userProfile ?? undefined }
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "An unexpected error occurred.",
+      }
+    }
+  }
+
   async function signOut() {
     if (isSupabaseConfigured) {
       await supabase.auth.signOut()
@@ -324,6 +462,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isAdmin = profile?.role === "admin"
 
+  const needsName = Boolean(user && profile && isPlaceholderName(profile.fullName))
+
   return (
     <AuthContext.Provider
       value={{
@@ -332,9 +472,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profile,
         isAdmin,
         loading,
+        needsName,
         signInWithEmail,
         signInAsAdmin,
         signUpWithEmail,
+        signInWithProvider,
+        signInWithPhone,
+        verifyPhoneOtp,
         signOut,
       }}
     >

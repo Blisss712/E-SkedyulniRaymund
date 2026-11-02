@@ -42,11 +42,12 @@ import { AdminLoginScreen } from "./features/admin/login"
 import type { AdminEvent } from "./features/admin/types"
 import { EVENTS_CHANGED_EVENT } from "./features/admin/eventsSync"
 import { isSupabaseConfigured, supabase } from "./lib/supabase"
+import { isPlaceholderName } from "./features/auth/types"
 import { ScheduleAssistantPanel } from "./features/assistant/assistant"
 
 function AppContent() {
   const isDesktop = useIsDesktop()
-  const { profile, user, isAdmin, signOut } = useAuth()
+  const { profile, user, isAdmin, loading, signOut } = useAuth()
 
   const [screen, setScreen] = useState<Screen>("welcome")
   const [prevScreen, setPrevScreen] = useState<Screen>("welcome")
@@ -124,6 +125,27 @@ function AppContent() {
     window.scrollTo({ top: 0, behavior: "smooth" })
     applyStatusBar(screen)
   }, [screen])
+
+  // Social sign-in (Google/Facebook) or phone OTP sign-ins end here: after an
+  // OAuth redirect back, or once a phone OTP is verified, route the user to
+  // their destination. New users without a real display name go to the name
+  // step first.
+  useEffect(() => {
+    if (loading || !user) return
+    if (screen !== "welcome" && screen !== "auth" && screen !== "tell-name") {
+      return
+    }
+    if (adminAuthenticated || isAdmin) {
+      go("admin")
+      return
+    }
+    if (!profile) return
+    if (isPlaceholderName(profile.fullName)) {
+      go("tell-name")
+      return
+    }
+    go("home")
+  }, [user, loading, profile, screen, isAdmin, adminAuthenticated])
 
   // Android back button support (only active inside the Android app).
   const screenRef = useRef(screen)
@@ -269,9 +291,11 @@ function AppContent() {
       return (
         <AuthScreen
           onSuccess={(loggedProfile) => {
-            if (loggedProfile?.role === "admin" || isAdmin) {
+            if (isAdmin || loggedProfile?.role === "admin") {
               setAdminAuthenticated(true)
               go("admin")
+            } else if (loggedProfile && isPlaceholderName(loggedProfile.fullName)) {
+              go("tell-name")
             } else {
               go("home")
             }
