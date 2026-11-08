@@ -1,4 +1,5 @@
 import type { AdminEvent, EventDraft, JoinRequest, Organization, OrganizationDraft } from "./types"
+import { memberApi } from "../../lib/memberApi"
 
 const API_URL = (import.meta.env.VITE_ADMIN_API_URL as string | undefined)?.replace(/\/$/, "")
 const TOKEN_KEY = "e-skedyul.admin-token"
@@ -59,15 +60,14 @@ export async function loadJoinRequests() {
 }
 
 export async function createJoinRequest(input: Omit<JoinRequest, "id" | "status" | "requestedAt">) {
-  return request<JoinRequest>("/join-requests", {
-    method: "POST",
-    body: JSON.stringify(input),
-    token: "",
+  return memberApi.createJoinRequest({
+    memberName: input.memberName,
+    groupCode: input.groupCode,
   })
 }
 
 export async function loadJoinRequest(id: string) {
-  return request<JoinRequest>(`/join-requests/${id}`, { token: "" })
+  return memberApi.getJoinRequest(id)
 }
 
 export async function updateJoinRequest(id: string, status: "approved" | "rejected") {

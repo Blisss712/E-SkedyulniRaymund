@@ -28,6 +28,7 @@ def to_response(item):
     return {
         "id": item.id,
         "name": item.name,
+        "joinCode": item.join_code,
         "description": item.description,
         "contactEmail": item.contact_email,
         "phone": item.phone,

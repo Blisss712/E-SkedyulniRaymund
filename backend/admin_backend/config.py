@@ -19,7 +19,7 @@ class Settings:
     def from_env(cls) -> "Settings":
         origins = tuple(
             value.strip()
-            for value in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+            for value in os.getenv("CORS_ORIGINS", "http://localhost:8443").split(",")
             if value.strip()
         )
         return cls(

@@ -1,4 +1,5 @@
 import { isSupabaseConfigured, supabase } from "../lib/supabase"
+import { isMemberApiConfigured, memberApi } from "../lib/memberApi"
 
 export type Assignment = {
   id: string
@@ -13,6 +14,10 @@ export type Assignment = {
 }
 
 export async function getMyAssignments(userId?: string): Promise<Assignment[]> {
+  if (isMemberApiConfigured && userId) {
+    return memberApi.getAssignments()
+  }
+
   if (isSupabaseConfigured && userId) {
     const { data, error } = await supabase
       .from("member_assignments")

@@ -191,10 +191,12 @@ export function SlotList({
 export function SlotVolunteerScreen({
   slot,
   onVolunteer,
+  error,
   onBack,
 }: {
   slot: Slot
   onVolunteer: () => void
+  error?: string
   onBack: () => void
 }) {
   const remaining = slot.totalSpots - slot.filledSpots
@@ -262,6 +264,7 @@ export function SlotVolunteerScreen({
         </div>
       </div>
       <div className="py-8 flex flex-col gap-4">
+        {error && <p role="alert" className="text-sm font-medium text-[#C0392B]">{error}</p>}
         <button
           onClick={onVolunteer}
           className="w-full min-h-[56px] rounded-full bg-[#1B3A6B] text-white text-[17px] font-bold hover:bg-[#142d54] active:scale-[0.98] transition-all cursor-pointer"
@@ -282,10 +285,12 @@ export function SlotVolunteerScreen({
 export function SlotServingScreen({
   slot,
   onCancelSpot,
+  error,
   onBack,
 }: {
   slot: Slot
   onCancelSpot: () => void
+  error?: string
   onBack: () => void
 }) {
   return (
@@ -358,6 +363,7 @@ export function SlotServingScreen({
         </div>
       </div>
       <div className="py-8 flex flex-col gap-4">
+        {error && <p role="alert" className="text-sm font-medium text-[#C0392B]">{error}</p>}
         {slot.withinCutoff && (
           <div className="flex items-start gap-2 px-1">
             <svg

@@ -403,6 +403,13 @@ function OrganizationDetails({ organization, admin, onBack, onEdit, onCreateEven
         <div className="rounded-2xl border border-border bg-white p-6 shadow-sm lg:col-span-2">
           <p className="text-xl font-bold text-text">Organization profile</p>
           <p className="mt-3 leading-relaxed text-muted">{organization.description || "No description provided."}</p>
+          {organization.joinCode && (
+            <div className="mt-5 rounded-xl border border-border bg-[#F4F6FB] p-4">
+              <p className="text-xs font-bold uppercase tracking-wide text-muted">Group join code</p>
+              <p className="mt-1 font-mono text-lg font-bold text-text">{organization.joinCode}</p>
+              <p className="mt-1 text-sm text-muted">Share this code with members so they can request to join this organization.</p>
+            </div>
+          )}
           <div className="mt-6 grid gap-5 border-t border-border pt-6 sm:grid-cols-2">
             {[
               ["Contact email", organization.contactEmail],

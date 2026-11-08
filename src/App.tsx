@@ -20,8 +20,12 @@ import { AdminScreen } from "./features/admin/admin"
 import { AdminLoginScreen } from "./features/admin/login"
 import { useJoinRequests } from "./features/admin/useJoinRequests"
 import { logoutAdmin } from "./features/admin/api"
+import { AuthScreen } from "./features/auth/AuthScreen"
+import { useAuth } from "./features/auth/AuthContext"
+import { isSupabaseConfigured } from "./lib/supabase"
 
 export default function App() {
+  const { user, signOut } = useAuth()
   const isDesktop = useIsDesktop()
   const [screen, setScreen] = useState<Screen>("welcome")
   const [prevScreen, setPrevScreen] = useState<Screen>("welcome")
@@ -93,7 +97,10 @@ export default function App() {
         tab={homeTab}
         onTabChange={setHomeTab}
         onJoin={() => go("join-group")}
-        onLogout={() => reset()}
+        onLogout={() => {
+          void signOut()
+          reset()
+        }}
         embedded={embedded}
       >
         {homeTab === "availability" ? (
@@ -101,6 +108,7 @@ export default function App() {
             recurringEntries={availability.recurringEntries}
             overrides={availability.overrides}
             slots={slots.slots}
+            error={availability.error}
             scheduledEvents={[]}
             onViewSlot={slot => {
               slots.setActiveSlot(slot)
@@ -132,7 +140,28 @@ export default function App() {
   switch (screen) {
     // ─── Wizard ───────────────────────────────────────────────────────────────
     case "welcome":
-      return <WelcomeScreen onStart={() => go("tell-name")} onAdmin={() => go("admin-login")} />
+      return (
+        <WelcomeScreen
+          onStart={() => go(isSupabaseConfigured && !user ? "auth" : "tell-name")}
+          onAdmin={() => go("admin-login")}
+        />
+      )
+
+    case "auth":
+      return (
+        <AuthScreen
+          onBack={() => go("welcome")}
+          onAdmin={() => go("admin-login")}
+          onSuccess={profile => {
+            if (profile?.role === "admin") {
+              setAdminAuthenticated(true)
+              go("admin")
+            } else {
+              go("tell-name")
+            }
+          }}
+        />
+      )
 
     case "admin-login":
       return (
@@ -185,11 +214,11 @@ export default function App() {
     case "join-group": {
       // Back returns to wherever the member came from: name entry during onboarding, or Home via "+ Join Another Ministry".
       const back = () => go(prevScreen)
-      const submitJoinRequest = async () => {
+      const submitJoinRequest = async (group: { groupCode: string; groupName: string }) => {
         const requestId = await joinRequests.createRequest({
             memberName: wizard.form.name || "Member",
-            groupCode: wizard.form.groupCode,
-            groupName: wizard.form.groupName,
+            groupCode: group.groupCode,
+            groupName: group.groupName,
         })
         setActiveRequestId(requestId)
         go("pending")
@@ -217,7 +246,11 @@ export default function App() {
       return (
         <SetRecurringScreen
           initial={availability.editingRecurring}
-          onSave={entry => { availability.saveRecurring(entry); go(dashboardReturnScreen) }}
+          onSave={async entry => {
+            const result = await availability.saveRecurring(entry)
+            if (result.ok) go(dashboardReturnScreen)
+            return result
+          }}
           onBack={() => go(dashboardReturnScreen)}
         />
       )
@@ -226,7 +259,11 @@ export default function App() {
       return (
         <AddOverrideScreen
           initial={availability.editingOverride}
-          onSave={entry => { availability.saveOverride(entry); go(dashboardReturnScreen) }}
+          onSave={async entry => {
+            const result = await availability.saveOverride(entry)
+            if (result.ok) go(dashboardReturnScreen)
+            return result
+          }}
           onBack={() => go(dashboardReturnScreen)}
         />
       )
@@ -236,7 +273,12 @@ export default function App() {
       return slots.activeSlot ? (
         <SlotVolunteerScreen
           slot={slots.activeSlot}
-          onVolunteer={() => { slots.volunteer(); go("slot-serving") }}
+          error={slots.error}
+          onVolunteer={() => {
+            void slots.volunteer().then(result => {
+              if (result.ok) go("slot-serving")
+            })
+          }}
           onBack={() => go(dashboardReturnScreen)}
         />
       ) : null
@@ -245,7 +287,12 @@ export default function App() {
       return slots.activeSlot ? (
         <SlotServingScreen
           slot={slots.activeSlot}
-          onCancelSpot={() => { slots.cancelSpot(); go(dashboardReturnScreen) }}
+          error={slots.error}
+          onCancelSpot={() => {
+            void slots.cancelSpot().then(result => {
+              if (result.ok) go(dashboardReturnScreen)
+            })
+          }}
           onBack={() => go(dashboardReturnScreen)}
         />
       ) : null

@@ -10,6 +10,7 @@ class ConflictResponse(BaseModel):
 class OrganizationResponse(BaseModel):
     id: str
     name: str
+    joinCode: str
     description: str
     contactEmail: str
     phone: str

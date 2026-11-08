@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { useAuth } from "../auth/AuthContext"
 import { isSupabaseConfigured, supabase } from "../../lib/supabase"
+import { isMemberApiConfigured, memberApi } from "../../lib/memberApi"
 
 import type {
   RecurringAvail,
@@ -62,6 +63,33 @@ export function useAvailability() {
     if (!isSupabaseConfigured || !user) return
 
     let active = true
+    if (isMemberApiConfigured) {
+      void memberApi.getAvailability().then(({ recurring, overrides: savedOverrides }) => {
+        if (!active) return
+        setRecurringEntries(recurring.map(entry => ({
+          id: entry.id,
+          days: entry.days,
+          startTime: entry.startTime.slice(0, 5),
+          endTime: entry.endTime.slice(0, 5),
+        })))
+        setOverrides(savedOverrides.map(entry => ({
+          id: entry.id,
+          date: entry.date,
+          type: entry.type,
+          startTime: entry.startTime?.slice(0, 5),
+          endTime: entry.endTime?.slice(0, 5),
+        })))
+        setLoadedFromServer(true)
+        setError("")
+      }).catch(reason => {
+        if (!active) return
+        setError(reason instanceof Error ? reason.message : "Unable to load availability.")
+      })
+      return () => {
+        active = false
+      }
+    }
+
     Promise.all([
       supabase
         .from("member_recurring_availability")
@@ -142,7 +170,15 @@ export function useAvailability() {
     },
 
     async saveRecurring(entry: RecurringAvail) {
-      if (isSupabaseConfigured && user) {
+      if (isMemberApiConfigured && user) {
+        try {
+          await memberApi.saveRecurringAvailability(entry)
+        } catch (reason) {
+          const message = reason instanceof Error ? reason.message : "Unable to save availability."
+          setError(message)
+          return { ok: false, message }
+        }
+      } else if (isSupabaseConfigured && user) {
         const result = await supabase.from("member_recurring_availability").upsert({
           id: entry.id,
           user_id: user.id,
@@ -165,7 +201,19 @@ export function useAvailability() {
     },
 
     async saveOverride(entry: OneTimeOverride) {
-      if (isSupabaseConfigured && user) {
+      if (isMemberApiConfigured && user) {
+        try {
+          await memberApi.saveAvailabilityOverride({
+            ...entry,
+            startTime: entry.startTime || null,
+            endTime: entry.endTime || null,
+          })
+        } catch (reason) {
+          const message = reason instanceof Error ? reason.message : "Unable to save availability."
+          setError(message)
+          return { ok: false, message }
+        }
+      } else if (isSupabaseConfigured && user) {
         const result = await supabase.from("member_availability_overrides").upsert({
           id: entry.id,
           user_id: user.id,
@@ -189,7 +237,15 @@ export function useAvailability() {
     },
 
     async removeRecurring(id: string) {
-      if (isSupabaseConfigured && user) {
+      if (isMemberApiConfigured && user) {
+        try {
+          await memberApi.deleteRecurringAvailability(id)
+        } catch (reason) {
+          const message = reason instanceof Error ? reason.message : "Unable to delete availability."
+          setError(message)
+          return { ok: false, message }
+        }
+      } else if (isSupabaseConfigured && user) {
         const result = await supabase
           .from("member_recurring_availability")
           .delete()
@@ -206,7 +262,15 @@ export function useAvailability() {
     },
 
     async removeOverride(id: string) {
-      if (isSupabaseConfigured && user) {
+      if (isMemberApiConfigured && user) {
+        try {
+          await memberApi.deleteAvailabilityOverride(id)
+        } catch (reason) {
+          const message = reason instanceof Error ? reason.message : "Unable to delete availability."
+          setError(message)
+          return { ok: false, message }
+        }
+      } else if (isSupabaseConfigured && user) {
         const result = await supabase
           .from("member_availability_overrides")
           .delete()

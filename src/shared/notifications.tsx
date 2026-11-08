@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { isSupabaseConfigured, supabase } from "../lib/supabase"
+import { isMemberApiConfigured, memberApi, type MemberNotification } from "../lib/memberApi"
 import { useAuth } from "../features/auth/AuthContext"
 
 type NotificationKind =
@@ -95,6 +96,17 @@ function fromDatabaseRow(row: {
   }
 }
 
+function fromApiNotification(row: MemberNotification): Notification {
+  return {
+    id: row.id,
+    title: row.title,
+    message: row.message,
+    time: formatTime(row.createdAt),
+    kind: row.kind,
+    unread: row.readAt === null,
+  }
+}
+
 function iconFor(kind: NotificationKind) {
   if (kind === "event" || kind === "event_reminder") return "!"
   if (kind === "schedule") return "◷"
@@ -152,6 +164,20 @@ export function NotificationCenter({
     let active = true
 
     async function loadNotifications() {
+      if (isMemberApiConfigured && user) {
+        try {
+          const data = await memberApi.getNotifications()
+          if (!active) return
+          setBackendError(null)
+          setNotifications(data.map(fromApiNotification))
+        } catch (reason) {
+          if (!active) return
+          console.error("Unable to load notifications:", reason)
+          setBackendError("Notifications are temporarily offline.")
+        }
+        return
+      }
+
       if (!isSupabaseConfigured || !user) {
         if (active) setNotifications(readNotifications())
         return
@@ -177,6 +203,14 @@ export function NotificationCenter({
     }
 
     void loadNotifications()
+
+    if (isMemberApiConfigured && user) {
+      const interval = window.setInterval(() => void loadNotifications(), 30_000)
+      return () => {
+        active = false
+        window.clearInterval(interval)
+      }
+    }
 
     if (!isSupabaseConfigured || !user) {
       return () => {
@@ -220,11 +254,20 @@ export function NotificationCenter({
     return () => document.removeEventListener("click", closeOnOutsideClick)
   }, [])
 
-  function markAllRead() {
+  async function markAllRead() {
+    if (isMemberApiConfigured && user) {
+      try {
+        await memberApi.markAllNotificationsRead()
+      } catch (reason) {
+        console.error("Unable to mark notifications as read:", reason)
+        setBackendError("Could not sync notification changes.")
+        return
+      }
+    }
     setNotifications((current) =>
       current.map((notification) => ({ ...notification, unread: false })),
     )
-    if (isSupabaseConfigured && user) {
+    if (!isMemberApiConfigured && isSupabaseConfigured && user) {
       void supabase
         .from("notifications")
         .update({ read_at: new Date().toISOString() })
@@ -239,13 +282,22 @@ export function NotificationCenter({
     }
   }
 
-  function markRead(id: string) {
+  async function markRead(id: string) {
+    if (isMemberApiConfigured && user) {
+      try {
+        await memberApi.markNotificationRead(id)
+      } catch (reason) {
+        console.error("Unable to mark notification as read:", reason)
+        setBackendError("Could not sync notification changes.")
+        return
+      }
+    }
     setNotifications((current) =>
       current.map((notification) =>
         notification.id === id ? { ...notification, unread: false } : notification,
       ),
     )
-    if (isSupabaseConfigured && user) {
+    if (!isMemberApiConfigured && isSupabaseConfigured && user) {
       void supabase
         .from("notifications")
         .update({ read_at: new Date().toISOString() })
@@ -260,11 +312,20 @@ export function NotificationCenter({
     }
   }
 
-  function remove(id: string) {
+  async function remove(id: string) {
+    if (isMemberApiConfigured && user) {
+      try {
+        await memberApi.deleteNotification(id)
+      } catch (reason) {
+        console.error("Unable to dismiss notification:", reason)
+        setBackendError("Could not sync notification changes.")
+        return
+      }
+    }
     setNotifications((current) =>
       current.filter((notification) => notification.id !== id),
     )
-    if (isSupabaseConfigured && user) {
+    if (!isMemberApiConfigured && isSupabaseConfigured && user) {
       void supabase
         .from("notifications")
         .delete()
@@ -279,7 +340,7 @@ export function NotificationCenter({
     }
   }
 
-  function simulateNotification() {
+  async function simulateNotification() {
     const notification = {
       user_id: user?.id,
       title: "New schedule update",
@@ -287,7 +348,16 @@ export function NotificationCenter({
       kind: "schedule" as const,
     }
 
-    if (isSupabaseConfigured && user) {
+    if (isMemberApiConfigured && user) {
+      try {
+        const saved = await memberApi.createNotification(notification)
+        setNotifications(current => [fromApiNotification(saved), ...current])
+        setBackendError(null)
+      } catch (reason) {
+        console.error("Unable to create notification:", reason)
+        setBackendError("Could not create a notification.")
+      }
+    } else if (isSupabaseConfigured && user) {
       void supabase
         .from("notifications")
         .insert(notification)
@@ -313,9 +383,18 @@ export function NotificationCenter({
     setOpen(true)
   }
 
-  function clearAll() {
+  async function clearAll() {
+    if (isMemberApiConfigured && user) {
+      try {
+        await memberApi.clearNotifications()
+      } catch (reason) {
+        console.error("Unable to clear notifications:", reason)
+        setBackendError("Could not sync notification changes.")
+        return
+      }
+    }
     setNotifications([])
-    if (isSupabaseConfigured && user) {
+    if (!isMemberApiConfigured && isSupabaseConfigured && user) {
       void supabase
         .from("notifications")
         .delete()
