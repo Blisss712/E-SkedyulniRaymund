@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from sqlalchemy import DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -58,6 +59,12 @@ class Organization(Base):
         String(20),
         default="active",
         nullable=False,
+    )
+    join_code: Mapped[str] = mapped_column(
+        String(32),
+        unique=True,
+        nullable=False,
+        default=lambda: f"ESK-{uuid4().hex[:12].upper()}",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

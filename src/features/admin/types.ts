@@ -11,6 +11,8 @@ export type Organization = {
 
   name: string
 
+  joinCode?: string
+
   description: string
 
   contactEmail: string
@@ -71,5 +73,5 @@ export type JoinRequest = {
   groupName: string
   status: JoinRequestStatus
   requestedAt: string
-  reviewedAt?: string
+  reviewedAt?: string | null
 }

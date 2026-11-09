@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { useAuth } from "../auth/AuthContext"
 import { isSupabaseConfigured, supabase } from "../../lib/supabase"
+import { isMemberApiConfigured, memberApi } from "../../lib/memberApi"
 
 import type { Slot } from "../../shared/slot"
 
@@ -32,6 +33,21 @@ export function useSlots() {
     if (!isSupabaseConfigured || !user) return
 
     let active = true
+    if (isMemberApiConfigured) {
+      void memberApi.getSlots().then(savedSlots => {
+        if (!active) return
+        setSlots(savedSlots)
+        setServerBacked(true)
+        setError("")
+      }).catch(reason => {
+        if (!active) return
+        setError(reason instanceof Error ? reason.message : "Unable to load volunteer slots.")
+      })
+      return () => {
+        active = false
+      }
+    }
+
     Promise.all([
       supabase
         .from("volunteer_slots")
@@ -103,7 +119,15 @@ export function useSlots() {
     async volunteer() {
       if (!activeSlot) return { ok: false, message: "No slot selected." }
 
-      if (isSupabaseConfigured && user) {
+      if (isMemberApiConfigured && user) {
+        try {
+          await memberApi.volunteerForSlot(activeSlot.id)
+        } catch (reason) {
+          const message = reason instanceof Error ? reason.message : "Unable to volunteer for this slot."
+          setError(message)
+          return { ok: false, message }
+        }
+      } else if (isSupabaseConfigured && user) {
         const result = await supabase.from("slot_signups").insert({
           slot_id: activeSlot.id,
           user_id: user.id,
@@ -134,7 +158,15 @@ export function useSlots() {
     async cancelSpot() {
       if (!activeSlot) return { ok: false, message: "No slot selected." }
 
-      if (isSupabaseConfigured && user) {
+      if (isMemberApiConfigured && user) {
+        try {
+          await memberApi.cancelSlotSignup(activeSlot.id)
+        } catch (reason) {
+          const message = reason instanceof Error ? reason.message : "Unable to cancel this signup."
+          setError(message)
+          return { ok: false, message }
+        }
+      } else if (isSupabaseConfigured && user) {
         const result = await supabase
           .from("slot_signups")
           .delete()

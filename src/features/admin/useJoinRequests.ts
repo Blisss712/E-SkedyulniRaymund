@@ -4,9 +4,9 @@ import {
   createJoinRequest as createJoinRequestApi,
   isAdminApiConfigured,
   loadJoinRequests,
-  loadJoinRequest,
   updateJoinRequest,
 } from "./api"
+import { isMemberApiConfigured, memberApi } from "../../lib/memberApi"
 
 function makeId() {
   return `request-${Date.now().toString(36)}`
@@ -47,9 +47,9 @@ export function useJoinRequests() {
   }
 
   async function refreshRequest(id: string) {
-    if (!isAdminApiConfigured || id.startsWith("request-")) return
+    if (!isMemberApiConfigured || id.startsWith("request-")) return
     try {
-      const saved = await loadJoinRequest(id)
+      const saved = await memberApi.getJoinRequest(id)
       setRequests(current => current.map(item => item.id === id ? saved : item))
     } catch (reason) {
       setApiError(reason instanceof Error ? reason.message : "Unable to refresh join request.")
@@ -74,7 +74,7 @@ export function useJoinRequests() {
       status: "pending",
       requestedAt: new Date().toISOString(),
     }
-    if (isAdminApiConfigured) {
+    if (isMemberApiConfigured) {
       try {
         const saved = await createJoinRequestApi(input)
         setRequests(current => [saved, ...current.filter(item => item.id !== request.id)])
@@ -82,7 +82,7 @@ export function useJoinRequests() {
         return saved.id
       } catch (reason) {
         setApiError(reason instanceof Error ? reason.message : "Unable to submit join request.")
-        return request.id
+        throw reason
       }
     } else {
       setRequests(current => [request, ...current])

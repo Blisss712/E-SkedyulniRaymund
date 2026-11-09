@@ -2,6 +2,7 @@ from uuid import UUID
 
 from ..core.errors import ServiceUnavailableError, UnauthorizedError
 from ..repositories.admin_repository import AdminRepository
+from ..models.member_profile import MemberProfile
 from ..schemas.auth import AuthenticatedUser
 from ..supabase import SupabaseService
 
@@ -43,6 +44,22 @@ class AuthService:
         }
 
     def verify(self, session, token: str):
+        uid = self._authenticated_user_id(token)
+        profile = AdminRepository(session).by_user_id(uid)
+        if not profile or not profile.active or profile.role != "admin":
+            raise UnauthorizedError("Administrator privileges are required.")
+        return profile
+
+    def verify_member(self, session, token: str) -> MemberProfile:
+        uid = self._authenticated_user_id(token)
+        if AdminRepository(session).by_user_id(uid):
+            raise UnauthorizedError("Member privileges are required.")
+        profile = session.get(MemberProfile, uid)
+        if not profile or not profile.active:
+            raise UnauthorizedError("Active member access is required.")
+        return profile
+
+    def _authenticated_user_id(self, token: str) -> UUID:
         if not self.supabase.configured():
             raise ServiceUnavailableError("Supabase authentication is not configured.")
         try:
@@ -57,7 +74,4 @@ class AuthService:
             uid = UUID(str(user_id))
         except ValueError as exc:
             raise UnauthorizedError() from exc
-        profile = AdminRepository(session).by_user_id(uid)
-        if not profile or not profile.active or profile.role != "admin":
-            raise UnauthorizedError("Administrator privileges are required.")
-        return profile
+        return uid

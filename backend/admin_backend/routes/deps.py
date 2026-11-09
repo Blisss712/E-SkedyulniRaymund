@@ -31,3 +31,13 @@ def require_admin(token: str = Depends(get_token)):
             "fullName": profile.full_name,
             "role": profile.role,
         }
+
+def require_member(token: str = Depends(get_token)):
+    with database.session() as session:
+        profile = auth_service.verify_member(session, token)
+        return {
+            "userId": str(profile.user_id),
+            "email": profile.email,
+            "fullName": profile.full_name,
+            "role": "member",
+        }

@@ -858,6 +858,7 @@ export function AvailabilityTab({
 
   onRemoveRecurring,
   onRemoveOverride,
+  error,
   onViewSlot, // the ones marked "serving" (volunteered) show on the timetable
 }: {
   recurringEntries: RecurringAvail[]
@@ -884,10 +885,13 @@ export function AvailabilityTab({
 
   onRemoveOverride: (id: string) => void
 
+  error?: string
+
   onViewSlot: (slot: Slot) => void
 }) {
   const { user } = useAuth()
   const [assignments, setAssignments] = useState<Assignment[]>([])
+  const [assignmentError, setAssignmentError] = useState("")
   const [confirmRemove, setConfirmRemove] = useState<{
     kind: "recurring" | "override"
     id: string
@@ -902,7 +906,14 @@ export function AvailabilityTab({
   useEffect(() => {
     let active = true
     getMyAssignments(user?.id).then((next) => {
-      if (active) setAssignments(next)
+      if (active) {
+        setAssignments(next)
+        setAssignmentError("")
+      }
+    }).catch((reason: unknown) => {
+      if (!active) return
+      console.error("Unable to load assignments:", reason)
+      setAssignmentError(reason instanceof Error ? reason.message : "Unable to load assignments.")
     })
     return () => {
       active = false
@@ -953,6 +964,16 @@ export function AvailabilityTab({
 
   return (
     <div>
+      {error && (
+        <p role="alert" className="mb-3 rounded-lg bg-red-50 p-3 text-sm font-medium text-[#C0392B]">
+          {error}
+        </p>
+      )}
+      {assignmentError && (
+        <p role="alert" className="mb-3 rounded-lg bg-red-50 p-3 text-sm font-medium text-[#C0392B]">
+          {assignmentError}
+        </p>
+      )}
       <p className="text-2xl font-extrabold text-[#1B3A6B]">
         My Availability This Week
       </p>
@@ -1149,7 +1170,7 @@ export function SetRecurringScreen({
   onBack,
 }: {
   initial?: RecurringAvail
-  onSave: (e: RecurringAvail) => void
+  onSave: (e: RecurringAvail) => Promise<{ ok: boolean; message?: string }>
   onBack: () => void
 }) {
   const [days, setDays] = useState<string[]>(initial?.days ?? [])
@@ -1159,8 +1180,9 @@ export function SetRecurringScreen({
   const [endTime, setEndTime] = useState(initial?.endTime ?? "12:00")
 
   const [errors, setErrors] = useState<{ days?: string; time?: string }>({})
+  const [saveError, setSaveError] = useState("")
 
-  function handleSave() {
+  async function handleSave() {
     const e: { days?: string; time?: string } = {}
 
     if (days.length === 0) e.days = "Please select at least one day."
@@ -1173,7 +1195,8 @@ export function SetRecurringScreen({
       return
     }
 
-    onSave({ id: initial?.id ?? `r-${Date.now()}`, days, startTime, endTime })
+    const result = await onSave({ id: initial?.id ?? `r-${Date.now()}`, days, startTime, endTime })
+    setSaveError(result.ok ? "" : result.message ?? "Unable to save availability.")
   }
 
   return (
@@ -1266,6 +1289,7 @@ export function SetRecurringScreen({
       </div>
 
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-[#D1D9E8] px-4 py-4 max-w-lg mx-auto">
+        {saveError && <p role="alert" className="mb-2 text-sm font-medium text-[#C0392B]">{saveError}</p>}
         <button
           onClick={handleSave}
           className="w-full min-h-[56px] bg-[#1B3A6B] text-white rounded-xl text-[17px] font-semibold hover:bg-[#142d54] transition-colors"
@@ -1285,7 +1309,7 @@ export function AddOverrideScreen({
   onBack,
 }: {
   initial?: OneTimeOverride
-  onSave: (e: OneTimeOverride) => void
+  onSave: (e: OneTimeOverride) => Promise<{ ok: boolean; message?: string }>
   onBack: () => void
 }) {
   const today = new Date().toISOString().split("T")[0]
@@ -1305,8 +1329,9 @@ export function AddOverrideScreen({
     type?: string
     time?: string
   }>({})
+  const [saveError, setSaveError] = useState("")
 
-  function handleSave() {
+  async function handleSave() {
     const e: typeof errors = {}
 
     if (!date) e.date = "Please choose a date."
@@ -1321,13 +1346,14 @@ export function AddOverrideScreen({
       return
     }
 
-    onSave({
+    const result = await onSave({
       id: initial?.id ?? `o-${Date.now()}`,
       date,
       type: type!,
       startTime: type === "free" ? startTime : undefined,
       endTime: type === "free" ? endTime : undefined,
     })
+    setSaveError(result.ok ? "" : result.message ?? "Unable to save availability.")
   }
 
   return (
@@ -1491,6 +1517,7 @@ export function AddOverrideScreen({
       </div>
 
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-[#D1D9E8] px-4 py-4 max-w-lg mx-auto">
+        {saveError && <p role="alert" className="mb-2 text-sm font-medium text-[#C0392B]">{saveError}</p>}
         <button
           onClick={handleSave}
           className="w-full min-h-[56px] bg-[#1B3A6B] text-white rounded-xl text-[17px] font-semibold hover:bg-[#142d54] transition-colors"

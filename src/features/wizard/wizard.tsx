@@ -3,6 +3,7 @@ import type { FormData } from "./types"
 import { ScreenShell, Card, Logo, Button, InputField, BackButton, ClockIcon } from "../../shared/ui"
 import { EXAMPLE_GROUPS, PENDING_STEPS } from "./data"
 import type { JoinRequestStatus } from "../admin/types"
+import { isMemberApiConfigured, memberApi } from "../../lib/memberApi"
 
 export function WelcomeScreen({ onStart, onAdmin }: { onStart: () => void; onAdmin: () => void }) {
   return (
@@ -75,20 +76,34 @@ export function TellNameScreen({ firstName, lastName, setFirstName, setLastName,
 export function JoinGroupScreen({
   data, setData, onJoin, onBack,
 }: {
-  data: FormData; setData: (d: Partial<FormData>) => void; onJoin: () => void; onBack: () => void
+  data: FormData
+  setData: (d: Partial<FormData>) => void
+  onJoin: (group: { groupCode: string; groupName: string }) => Promise<void>
+  onBack: () => void
 }) {
   const [error, setError] = useState("")
   const [pasteMode, setPasteMode] = useState(false)
   const [pasteLink, setPasteLink] = useState("")
 
-  function handleJoin() {
+  async function handleJoin() {
     const code = pasteMode
       ? (pasteLink.split("/").pop() || "").toUpperCase().trim()
       : data.groupCode.trim().toUpperCase()
     if (!code) { setError("Please enter a group code to continue."); return }
-    const groupName = EXAMPLE_GROUPS[code]
-    if (!groupName) { setError("We couldn't find a group with that code. Please check with your group leader and try again."); return }
-    setData({ groupCode: code, groupName }); setError(""); onJoin()
+    try {
+      const group = isMemberApiConfigured
+        ? await memberApi.lookupGroup(code)
+        : { name: EXAMPLE_GROUPS[code] }
+      if (!group.name) {
+        setError("We couldn't find a group with that code. Please check with your group leader and try again.")
+        return
+      }
+      setData({ groupCode: code, groupName: group.name })
+      setError("")
+      await onJoin({ groupCode: code, groupName: group.name })
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to submit the group request.")
+    }
   }
 
   return (
@@ -124,7 +139,7 @@ export function JoinGroupScreen({
           <Button onClick={handleJoin} variant="primary">Join This Group</Button>
         </div>
       </Card>
-      <div className="mt-5 bg-[#EFF6FF] border border-[#2563EB]/20 rounded-xl p-4">
+      {!isMemberApiConfigured && <div className="mt-5 bg-[#EFF6FF] border border-[#2563EB]/20 rounded-xl p-4">
         <p className="text-[#2563EB] font-semibold text-[15px] mb-2">Try these sample codes:</p>
         <div className="flex flex-wrap gap-2">
           {Object.keys(EXAMPLE_GROUPS).map(code => (
@@ -132,6 +147,7 @@ export function JoinGroupScreen({
           ))}
         </div>
       </div>
+      }
     </ScreenShell>
   )
 }
