@@ -75,6 +75,18 @@ CREATE TABLE IF NOT EXISTS public.organization_member_accounts (
     PRIMARY KEY (organization_id, user_id)
 );
 
+-- Ministry coordinators (leaders). An administrator appoints an existing member
+-- of a ministry to coordinate it; that account can then create and organise the
+-- ministry's events from the Coordinator Workspace. See
+-- supabase/organization_leaders.sql for existing projects.
+CREATE TABLE IF NOT EXISTS public.organization_leaders (
+    organization_id VARCHAR(40) NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES public.member_profiles(user_id) ON DELETE CASCADE,
+    appointed_by UUID NULL REFERENCES public.admin_profiles(user_id) ON DELETE SET NULL,
+    appointed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (organization_id, user_id)
+);
+
 -- ------------------------------------------------------------------------------
 -- 3. EVENTS & VOLUNTEER SLOTS
 -- ------------------------------------------------------------------------------
@@ -199,6 +211,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_notifications_event_delivery
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_organizations_status ON public.organizations(status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_organizations_join_code_ci ON public.organizations(upper(join_code));
+CREATE INDEX IF NOT EXISTS idx_organization_leaders_user ON public.organization_leaders(user_id);
 CREATE INDEX IF NOT EXISTS idx_events_organization ON public.events(organization_id);
 CREATE INDEX IF NOT EXISTS idx_events_starts_at ON public.events(starts_at);
 CREATE INDEX IF NOT EXISTS ix_join_requests_organization ON public.organization_join_requests(organization_id);
@@ -262,6 +275,76 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION public.is_admin(UUID) TO anon, authenticated;
+
+-- Check whether a user coordinates (leads) a specific ministry. SECURITY DEFINER
+-- so the organization_leaders policies below can call it without recursing.
+CREATE OR REPLACE FUNCTION public.is_organization_leader(
+    p_organization_id VARCHAR,
+    p_user_id UUID
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.organization_leaders
+        WHERE organization_id = p_organization_id
+          AND user_id = p_user_id
+    );
+$$;
+
+GRANT EXECUTE ON FUNCTION public.is_organization_leader(VARCHAR, UUID) TO authenticated;
+
+-- A coordinator must already belong to the ministry they lead.
+CREATE OR REPLACE FUNCTION public.validate_organization_leader()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM public.organization_member_accounts
+        WHERE organization_id = NEW.organization_id
+          AND user_id = NEW.user_id
+    ) THEN
+        RAISE EXCEPTION
+            'A coordinator must be a member of the ministry they lead. Approve this member''s join request for that ministry first.';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS validate_organization_leader ON public.organization_leaders;
+CREATE TRIGGER validate_organization_leader
+    BEFORE INSERT OR UPDATE ON public.organization_leaders
+    FOR EACH ROW EXECUTE FUNCTION public.validate_organization_leader();
+
+-- Losing the membership also loses the coordinator appointment.
+CREATE OR REPLACE FUNCTION public.revoke_leadership_with_membership()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    DELETE FROM public.organization_leaders
+    WHERE organization_id = OLD.organization_id
+      AND user_id = OLD.user_id;
+
+    RETURN OLD;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS revoke_leadership_with_membership ON public.organization_member_accounts;
+CREATE TRIGGER revoke_leadership_with_membership
+    AFTER DELETE ON public.organization_member_accounts
+    FOR EACH ROW EXECUTE FUNCTION public.revoke_leadership_with_membership();
 
 -- Helper function to resolve username or email for admin authentication
 CREATE OR REPLACE FUNCTION public.get_admin_email(p_identifier TEXT)
@@ -426,6 +509,7 @@ ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organization_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organization_member_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.organization_leaders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organization_join_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.member_recurring_availability ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.member_availability_overrides ENABLE ROW LEVEL SECURITY;
@@ -478,6 +562,12 @@ FOR ALL TO authenticated
 USING (public.is_admin(auth.uid()))
 WITH CHECK (public.is_admin(auth.uid()));
 
+-- A coordinator keeps sight of the ministry they lead even when it is inactive.
+DROP POLICY IF EXISTS "Coordinators read their ministries" ON public.organizations;
+CREATE POLICY "Coordinators read their ministries" ON public.organizations
+FOR SELECT TO authenticated
+USING (public.is_organization_leader(id, auth.uid()));
+
 -- Events
 DROP POLICY IF EXISTS "Authenticated read published events" ON public.events;
 CREATE POLICY "Authenticated read published events" ON public.events
@@ -489,6 +579,20 @@ CREATE POLICY "Admins full manage events" ON public.events
 FOR ALL TO authenticated
 USING (public.is_admin(auth.uid()))
 WITH CHECK (public.is_admin(auth.uid()));
+
+-- Coordinators create and organise the events of the ministries they lead. RLS
+-- policies are additive, so the administrator policies above still apply to them
+-- and to every administrator.
+DROP POLICY IF EXISTS "Coordinators read ministry events" ON public.events;
+CREATE POLICY "Coordinators read ministry events" ON public.events
+FOR SELECT TO authenticated
+USING (public.is_organization_leader(organization_id, auth.uid()));
+
+DROP POLICY IF EXISTS "Coordinators manage ministry events" ON public.events;
+CREATE POLICY "Coordinators manage ministry events" ON public.events
+FOR ALL TO authenticated
+USING (public.is_organization_leader(organization_id, auth.uid()))
+WITH CHECK (public.is_organization_leader(organization_id, auth.uid()));
 
 -- Join Requests
 DROP POLICY IF EXISTS "Members insert own join requests" ON public.organization_join_requests;
@@ -518,6 +622,22 @@ CREATE POLICY "Admins full manage memberships" ON public.organization_member_acc
 FOR ALL TO authenticated
 USING (public.is_admin(auth.uid()))
 WITH CHECK (public.is_admin(auth.uid()));
+
+-- Coordinator appointments: an administrator appoints/revokes them in the
+-- "Coordinators" screen; a coordinator can read their own rows so the app can
+-- decide which workspace to open on sign-in.
+DROP POLICY IF EXISTS "Coordinators read own appointments" ON public.organization_leaders;
+CREATE POLICY "Coordinators read own appointments" ON public.organization_leaders
+FOR SELECT TO authenticated
+USING (user_id = auth.uid() OR public.is_admin(auth.uid()));
+
+DROP POLICY IF EXISTS "Admins manage coordinator appointments" ON public.organization_leaders;
+CREATE POLICY "Admins manage coordinator appointments" ON public.organization_leaders
+FOR ALL TO authenticated
+USING (public.is_admin(auth.uid()))
+WITH CHECK (public.is_admin(auth.uid()));
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.organization_leaders TO authenticated;
 
 -- Availability
 DROP POLICY IF EXISTS "Members manage own recurring availability" ON public.member_recurring_availability;

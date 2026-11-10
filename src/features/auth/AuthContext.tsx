@@ -1,4 +1,4 @@
-﻿import {
+import {
   createContext,
   useContext,
   useEffect,
@@ -13,8 +13,32 @@ import {
   type AuthContextType,
   type UserProfile,
 } from "./types"
+import { fetchMyLeaderships, type LeaderMinistry } from "../organizations/leaders"
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+
+/**
+ * A project that has not run supabase/organization_leaders.sql has no
+ * appointments table. That is not an error the member can act on, so it is
+ * logged once and treated as "no coordinator assignments" rather than blocking
+ * sign-in.
+ */
+let leadershipLookupWarned = false
+
+async function loadLeaderships(userId: string): Promise<LeaderMinistry[]> {
+  try {
+    return await fetchMyLeaderships(userId)
+  } catch (reason) {
+    if (!leadershipLookupWarned) {
+      leadershipLookupWarned = true
+      console.warn(
+        "Coordinator assignments are unavailable. Run supabase/organization_leaders.sql in the Supabase SQL editor to enable ministry coordinators.",
+        reason,
+      )
+    }
+    return []
+  }
+}
 
 /** The `member_profiles` columns this app reads. */
 type MemberProfileRow = {
@@ -149,13 +173,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const fallbackName =
       metaName || userEmail.split("@")[0] || "Member"
 
-    const fallbackProfile: UserProfile = {
+    // Used when the profile tables cannot be reached at all; sign-in still
+    // succeeds, just without coordinator access.
+    const baseProfile: UserProfile = {
       id: userId,
       email: userEmail,
       fullName: fallbackName,
       role: "member",
       active: true,
       onboarded: metadataOnboarded,
+      leaderOrganizations: [],
     }
 
     try {
@@ -175,12 +202,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           role: "admin",
           active: true,
           onboarded: true,
+          leaderOrganizations: [],
         }
         setProfile(adminProfile)
         return adminProfile
       }
 
-      // 2. Check if user is a member
+      // 2. Coordinator appointments. Read before the member row so the role can
+      // be resolved once: an appointment is what grants the limited workspace.
+      const leaderships = await loadLeaderships(userId)
+      const role = leaderships.length > 0 ? "leader" : "member"
+
+      const fallbackProfile: UserProfile = {
+        id: userId,
+        email: userEmail,
+        fullName: fallbackName,
+        role,
+        active: true,
+        onboarded: metadataOnboarded,
+        leaderOrganizations: leaderships,
+      }
+
+      // 3. Check if user is a member
       let row: MemberProfileRow | null = null
       let hasOnboardedColumn = true
 
@@ -217,19 +260,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             metaName ||
             userEmail.split("@")[0] ||
             "Member",
-          role: "member",
+          role,
           active: row.active,
           onboarded: resolveOnboarded(
             row.onboarded,
             hasOnboardedColumn,
             metadataOnboarded,
           ),
+          leaderOrganizations: leaderships,
         }
         setProfile(memberProfile)
         return memberProfile
       }
 
-      // 3. Repair the missing profile row, then fall back to user metadata
+      // 4. Repair the missing profile row, then fall back to user metadata
       await ensureMemberProfile(
         userId,
         userEmail,
@@ -241,8 +285,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error("Error fetching user profile:", err)
       // Sign-in must succeed even if the profile tables are unreachable.
-      setProfile(fallbackProfile)
-      return fallbackProfile
+      setProfile(baseProfile)
+      return baseProfile
     }
   }
 
@@ -317,30 +361,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function signInAsAdmin(identifier: string, password: string): Promise<{
-    ok: boolean
-    error?: string
-    profile?: UserProfile
-  }> {
+  /**
+   * Shared password check for the two separate workspace sign-in forms.
+   *
+   * `expected` decides which kind of account may continue: the admin form
+   * accepts only an administrator, and the leader/coordinator form accepts only
+   * an account an administrator appointed to a ministry. A valid password for
+   * the wrong kind of account is signed out again with a message pointing at
+   * the correct form.
+   */
+  async function signInToWorkspace(
+    identifier: string,
+    password: string,
+    expected: "admin" | "leader",
+  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
+    const isAdminForm = expected === "admin"
     const cleanId = identifier.trim()
+
     if (!cleanId || !password) {
       return {
         ok: false,
-        error: "Enter your admin email or username and password.",
+        error: isAdminForm
+          ? "Enter your admin email or username and password."
+          : "Enter the email and password of your coordinator account.",
       }
     }
 
     if (!isSupabaseConfigured) {
       return {
         ok: false,
-        error: "Authentication is not configured. Add the Supabase environment variables.",
+        error: isAdminForm
+          ? "Authentication is not configured. Add the Supabase environment variables."
+          : "Coordinator sign in needs the Supabase environment variables.",
       }
     }
 
     // Supabase Auth only accepts an email address. `get_admin_email()` maps the
     // username stored in admin_profiles to that email before the password check.
+    // Coordinators are ordinary members, so they sign in with their own email.
     let emailToUse = cleanId.toLowerCase()
-    if (!cleanId.includes("@")) {
+    if (isAdminForm && !cleanId.includes("@")) {
       const { data: resolvedEmail, error: resolveError } = await supabase.rpc(
         "get_admin_email",
         { p_identifier: cleanId },
@@ -357,11 +417,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (typeof resolvedEmail !== "string" || !resolvedEmail) {
         return {
           ok: false,
-          error: `No administrator account uses the username "${cleanId}". Try your email address instead.`,
+          error: `No administrator username "${cleanId}" was found.`,
         }
       }
 
       emailToUse = resolvedEmail
+    } else if (!isAdminForm && !cleanId.includes("@")) {
+      return {
+        ok: false,
+        error: "Coordinators sign in with the email address on their account.",
+      }
     }
 
     try {
@@ -381,17 +446,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // The password was valid, but only admin_profiles grants the workspace.
+      // The password was valid, but the account also has to hold the role the
+      // form is for.
       const resolvedProfile = await fetchProfile(data.user, emailToUse)
+      const signedInEmail = data.user.email || emailToUse
 
-      if (resolvedProfile?.role !== "admin") {
+      if (resolvedProfile?.role !== expected) {
         await supabase.auth.signOut()
         setUser(null)
         setSession(null)
         setProfile(null)
+
+        if (resolvedProfile?.role === "admin") {
+          return {
+            ok: false,
+            error: `${signedInEmail} is an administrator account. Use the Admin sign in.`,
+          }
+        }
+        if (resolvedProfile?.role === "leader") {
+          return {
+            ok: false,
+            error: `${signedInEmail} is a ministry coordinator account. Use the Leader/Coordinator sign in.`,
+          }
+        }
         return {
           ok: false,
-          error: `${data.user.email || emailToUse} signed in, but it is not an administrator yet. An existing administrator must promote it by running the SQL in supabase/promote_to_admin.sql in the Supabase SQL editor.`,
+          error: isAdminForm
+            ? `${signedInEmail} signed in, but it is not an administrator. If you are a ministry coordinator, use the Leader/Coordinator sign in; otherwise an existing administrator must promote it with supabase/promote_to_admin.sql.`
+            : `${signedInEmail} signed in, but it is not appointed as a ministry coordinator yet. Ask an administrator to appoint it in the Administrator Workspace → Coordinators.`,
         }
       }
 
@@ -402,9 +484,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         error:
           err instanceof Error
             ? err.message
-            : "An unexpected error occurred during admin sign in.",
+            : "An unexpected error occurred during sign in.",
       }
     }
+  }
+
+  /** Administrator-only form: email/username + password. */
+  async function signInAsAdmin(
+    identifier: string,
+    password: string,
+  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
+    return signInToWorkspace(identifier, password, "admin")
+  }
+
+  /** Leader/coordinator form: the account email + password. */
+  async function signInAsCoordinator(
+    identifier: string,
+    password: string,
+  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
+    return signInToWorkspace(identifier, password, "leader")
   }
 
   async function signUpWithEmail(
@@ -641,7 +739,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(null)
   }
 
+  /**
+   * Re-reads the signed-in account's role and coordinator appointments.
+   *
+   * Appointments are made by an administrator while the coordinator may already
+   * be signed in, so the workspace re-checks them instead of trusting the
+   * profile loaded at sign-in.
+   */
+  async function refreshProfile(): Promise<UserProfile | null> {
+    if (!user) return null
+    return (await fetchProfile(user)) ?? null
+  }
+
   const isAdmin = profile?.role === "admin"
+
+  const isLeader = profile?.role === "leader"
 
   const needsName = Boolean(user && profile && isPlaceholderName(profile.fullName))
 
@@ -652,10 +764,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session,
         profile,
         isAdmin,
+        isLeader,
         loading,
         needsName,
+        refreshProfile,
         signInWithEmail,
         signInAsAdmin,
+        signInAsCoordinator,
         signUpWithEmail,
         signInWithProvider,
         signInWithPhone,

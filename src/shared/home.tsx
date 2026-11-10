@@ -145,6 +145,10 @@ export function HomeScreen({
 
   onAdmin, // the open tab's content
 
+  isLeader = false,
+
+  onLeader,
+
   onAssistant,
 }: {
   userName: string
@@ -171,6 +175,11 @@ export function HomeScreen({
   isAdmin?: boolean
 
   onAdmin?: () => void
+
+  /** True when the account coordinates at least one ministry. */
+  isLeader?: boolean
+
+  onLeader?: () => void
 
   onAssistant?: () => void
 }) {
@@ -226,6 +235,15 @@ export function HomeScreen({
                     className="rounded-xl border border-[#C9921A] bg-[#C9921A] px-3 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-[#B78216] cursor-pointer"
                   >
                     Admin Workspace →
+                  </button>
+                )}
+                {isLeader && onLeader && (
+                  <button
+                    type="button"
+                    onClick={onLeader}
+                    className="rounded-xl border border-[#C9921A] bg-[#C9921A] px-3 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-[#B78216] cursor-pointer"
+                  >
+                    Coordinator Workspace →
                   </button>
                 )}
                 <button

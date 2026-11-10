@@ -98,6 +98,7 @@ export function AuthScreen({
   onSuccess,
   onBack,
   onAdmin,
+  onCoordinator,
   onSkip,
   defaultTab = "signin",
   notice = "",
@@ -108,6 +109,8 @@ export function AuthScreen({
   ) => void
   onBack: () => void
   onAdmin?: () => void
+  /** Opens the separate leader/coordinator sign-in screen. */
+  onCoordinator?: () => void
   onSkip?: () => void
   defaultTab?: AuthTab
   /** Why the last Google/Facebook redirect failed, shown as soon as this screen opens. */
@@ -537,7 +540,16 @@ export function AuthScreen({
               onClick={onAdmin}
               className="text-xs font-bold text-[#1B3A6B] hover:underline cursor-pointer"
             >
-              Sign in to Administrator Workspace →
+              Administrator sign in →
+            </button>
+          )}
+          {onCoordinator && (
+            <button
+              type="button"
+              onClick={onCoordinator}
+              className="text-xs font-bold text-[#1B3A6B] hover:underline cursor-pointer"
+            >
+              Leader / Coordinator sign in →
             </button>
           )}
         </div>

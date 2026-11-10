@@ -7,9 +7,10 @@ This application connects directly to Supabase without needing a Python or FastA
 1. Create a free project at [supabase.com](https://supabase.com).
 2. Open your Supabase project dashboard -> **SQL Editor** -> **New query**.
 3. Copy and paste the contents of `supabase/schema.sql` (or `supabase/admin_setup.sql` if updating existing schema) and click **Run**.
-   - This creates all tables (`organizations`, `events`, `member_profiles`, `admin_profiles`, `organization_join_requests`, `notifications`).
+   - This creates all tables (`organizations`, `events`, `member_profiles`, `admin_profiles`, `organization_join_requests`, `organization_leaders`, `notifications`).
    - It sets up automatic user registration triggers, username resolution (`get_admin_email`), and Row Level Security (RLS).
    - An existing project that already has `member_profiles` without the `onboarded` column also needs `supabase/member_onboarding.sql` (see "Signing in and signing up").
+   - An existing project that wants ministry coordinators also needs `supabase/organization_leaders.sql` (see section 2.4).
 4. Get your API credentials from Supabase Dashboard -> **Project Settings** -> **API**:
    - Project URL (`https://xyz.supabase.co`)
    - `anon` `public` key
@@ -231,6 +232,58 @@ showed a fixed sample ministry list on the dashboard. Those rows were never visi
 administrator and have no organization attached, so they are ignored now — they are not
 imported into the database.
 
+## 2.4 Ministry coordinators (leaders)
+
+A **coordinator** is an ordinary member account that an administrator appoints to one
+ministry. Coordinators can add and organise that ministry's events from a limited
+**Coordinator Workspace**; they keep their member dashboard for availability and open
+slots. They cannot create organizations, review join requests, or appoint other
+coordinators — those stay administrator-only.
+
+Appointments live in one table:
+
+| Table | Holds | Read by |
+| --- | --- | --- |
+| `organization_leaders` | one row per (ministry, member) appointment, with who appointed it and when | the auth context on sign-in, the admin's **Coordinators** screen, the event/organization RLS policies |
+
+### Install
+
+`organization_leaders` is part of `schema.sql`, so a fresh project needs no extra step.
+For an existing project, run [`supabase/organization_leaders.sql`](organization_leaders.sql)
+once in the Supabase SQL Editor. It is idempotent and creates the table, the
+`is_organization_leader()` helper, the "coordinator must belong to the ministry" trigger,
+and the RLS policies that let a coordinator manage only their ministry's events.
+
+Until that script is run the app still works: coordinator lookups are treated as "no
+appointments" and every account stays a member.
+
+### Appoint a coordinator
+
+1. The member must already belong to the ministry (their join request must be approved).
+2. Sign in to the **Administrator Workspace** and open **Coordinators**.
+3. Search the member accounts by name or email, select the account, choose one of the
+   ministries it belongs to, and click **Appoint as coordinator**.
+4. The member now sees a **Coordinator Workspace** button on their dashboard after their
+   next profile refresh/sign-in. They can also use the separate **Leader / Coordinator
+   sign in** with their account email.
+
+**Remove access** on the same screen revokes the appointment; the account keeps working as
+a normal member. Removing the member from the ministry also removes the appointment
+automatically.
+
+### What the policies allow
+
+- `organization_leaders`: administrators insert/delete appointments; a coordinator can read
+  their own rows (which is how the app decides which workspace to open).
+- `organizations`: a coordinator can read the ministry they lead even when it is inactive.
+- `events`: a coordinator can read every event of their ministries (not just published ones)
+  and insert, update, or delete events for those ministries. The administrator policies are
+  additive, so administrators still manage everything.
+
+To verify the installation, run [`supabase/verify_organizations.sql`](verify_organizations.sql);
+section 7 lists the current appointments. The appointment screen is also a safe way to check:
+if the table is missing it reports that the appointments could not be loaded.
+
 ## 3. Creating an Admin Account
 
 An administrator is any Supabase Auth user that also has a row in `admin_profiles`.
@@ -283,11 +336,30 @@ and new setups do not create it, but an existing project may still have it. To c
 that path permanently, run the cleanup section at the top of
 [`supabase/promote_to_admin.sql`](promote_to_admin.sql).
 
-## 4. Signing In as Admin
+## 4. Signing In
 
-- Click **Sign in as Admin** on the welcome screen.
+The welcome screen separates the two staff sign-ins: **Admin sign in** and **Leader /
+Coordinator sign in**. Each form only lets its own kind of account through, so a
+coordinator who opens the admin form (or an administrator who opens the coordinator form)
+is signed out again and told which form to use.
+
+### 4.1 Administrator sign in
+
+- Click **Admin sign in** on the welcome screen (also linked from the member sign-in
+  screen as **Administrator sign in**).
 - With `VITE_ADMIN_API_URL` set, sign in with either your **admin email** (`admin@example.com`) or your **admin username** (`admin`). The FastAPI backend resolves the username to the email and validates the token.
 - Without the admin API but with Supabase configured, the same form authenticates directly against Supabase Auth using the administrator's **email address or admin username** and password, then confirms the `admin_profiles` role. Accounts that are not in `admin_profiles` are rejected; promote them from the SQL editor (see section 3).
 - Only when neither Supabase nor the admin API is configured does the offline demo account exist: type **admin** and **admin123**.
-- Member **Sign in** also recognizes any account listed in `admin_profiles` and opens the administrator workspace, so promoted accounts can sign in either way.
+
+### 4.2 Leader / Coordinator sign in
+
+- Click **Leader / Coordinator sign in** on the welcome screen (also linked from the member
+  sign-in screen).
+- Sign in with the **email and password of the member account** an administrator appointed
+  as a coordinator (see section 2.4). There is no username form and no offline demo
+  coordinator account.
+- Only appointed coordinators pass. An administrator account is rejected with a pointer to
+  the admin form, and an ordinary member is told to ask an administrator for an appointment.
+- A coordinator can still use the normal member **Sign in**: that opens their member
+  dashboard, where the **Coordinator Workspace** button is available.
 

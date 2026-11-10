@@ -1,6 +1,7 @@
 import type { Session, User } from "@supabase/supabase-js"
+import type { LeaderMinistry } from "../organizations/leaders"
 
-export type UserRole = "member" | "admin"
+export type UserRole = "member" | "leader" | "admin"
 
 export type UserProfile = {
   id: string
@@ -14,6 +15,11 @@ export type UserProfile = {
    * in, so the name alone cannot tell a new account from a returning one.
    */
   onboarded: boolean
+  /**
+   * The ministries this account coordinates. Empty for ordinary members, and
+   * the list the Coordinator Workspace is limited to for a `leader`.
+   */
+  leaderOrganizations: LeaderMinistry[]
 }
 
 export type SocialProvider = "google" | "facebook" | "apple"
@@ -40,14 +46,27 @@ export type AuthContextType = {
   session: Session | null
   profile: UserProfile | null
   isAdmin: boolean
+  /** True when the account coordinates at least one ministry. */
+  isLeader: boolean
   loading: boolean
   needsName: boolean
+  /** Re-reads the profile (and coordinator appointments) from the database. */
+  refreshProfile: () => Promise<UserProfile | null>
   signInWithEmail: (
     email: string,
     password: string,
   ) => Promise<{ ok: boolean; error?: string; profile?: UserProfile }>
   signInAsAdmin: (
     identifier: string,
+    password: string,
+  ) => Promise<{
+    ok: boolean
+    error?: string
+    profile?: UserProfile
+  }>
+  /** The separate leader/coordinator form; only appointed coordinators pass. */
+  signInAsCoordinator: (
+    email: string,
     password: string,
   ) => Promise<{
     ok: boolean

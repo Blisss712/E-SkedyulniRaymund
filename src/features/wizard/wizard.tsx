@@ -7,10 +7,11 @@ import { useMinistryOptions, type MinistryOption } from "./ministryOptions"
 import { MinistryRequestPicker, toggleMinistry, type MinistryRequestProgress } from "./requestAccess"
 import { JoinRequestOutcome } from "./requestStatus"
 
-export function WelcomeScreen({ onStart, onSignIn, onAdmin, accountsEnabled = false }: {
+export function WelcomeScreen({ onStart, onSignIn, onAdmin, onCoordinator, accountsEnabled = false }: {
   onStart: () => void
   onSignIn: () => void
   onAdmin: () => void
+  onCoordinator: () => void
   accountsEnabled?: boolean
 }) {
   return (
@@ -39,7 +40,18 @@ export function WelcomeScreen({ onStart, onSignIn, onAdmin, accountsEnabled = fa
         <div className="flex w-full flex-col items-center gap-3">
           <Button onClick={onStart}>{accountsEnabled ? "Create account" : "Get Started"}</Button>
           <Button onClick={onSignIn} variant="secondary">Sign in</Button>
-          <Button onClick={onAdmin} variant="ghost">Sign in as Admin</Button>
+        </div>
+
+        <div className="w-full">
+          <div className="flex items-center gap-3">
+            <div className="h-px flex-1 bg-[#D1D9E8]" />
+            <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">Parish staff</span>
+            <div className="h-px flex-1 bg-[#D1D9E8]" />
+          </div>
+          <div className="mt-3 flex flex-col gap-2">
+            <Button onClick={onAdmin} variant="ghost" size="compact">Admin sign in</Button>
+            <Button onClick={onCoordinator} variant="ghost" size="compact">Leader / Coordinator sign in</Button>
+          </div>
         </div>
 
         <p className="text-center text-[15px] leading-relaxed text-[#64748B]">

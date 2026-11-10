@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 import { Button, InputField } from "../../shared/ui"
 import { useAdmin } from "./useAdmin"
+import { CoordinatorsSection } from "./coordinators"
 import type {
   AdminEvent,
   EventDraft,
@@ -13,13 +14,26 @@ import type {
   Recurrence,
 } from "./types"
 
-export type AdminSection = "dashboard" | "organizations" | "events" | "requests"
+export type AdminSection = "dashboard" | "organizations" | "events" | "requests" | "coordinators"
 const ADMIN_SECTIONS: { value: AdminSection; label: string }[] = [
   { value: "dashboard", label: "Dashboard" },
   { value: "organizations", label: "Organizations" },
   { value: "events", label: "Events" },
   { value: "requests", label: "Join requests" },
+  { value: "coordinators", label: "Coordinators" },
 ]
+/**
+ * A coordinator sees only their own ministries: no organization management, no
+ * join-request review, and no Coordinator appointments of their own.
+ */
+const COORDINATOR_SECTIONS: { value: AdminSection; label: string }[] = [
+  { value: "dashboard", label: "Dashboard" },
+  { value: "organizations", label: "My ministries" },
+  { value: "events", label: "Events" },
+]
+
+/** Who is using the workspace: a full administrator or a ministry coordinator. */
+export type AdminWorkspaceRole = "admin" | "leader"
 type AdminView =
   | { name: "section"; section: AdminSection }
   | { name: "organization"; id: string }
@@ -104,7 +118,7 @@ function RequestStatusBadge({ status }: { status: JoinRequestStatus }) {
   )
 }
 
-function AdminBrand({ compact = false }: { compact?: boolean }) {
+function AdminBrand({ compact = false, role = "admin" }: { compact?: boolean; role?: AdminWorkspaceRole }) {
   return (
     <div className="flex items-center gap-3">
       <div className={`flex shrink-0 items-center justify-center rounded-xl bg-white/10 ${compact ? "size-10" : "size-12"}`}>
@@ -115,21 +129,24 @@ function AdminBrand({ compact = false }: { compact?: boolean }) {
       </div>
       <div>
         <p className={`${compact ? "text-lg" : "text-xl"} font-extrabold tracking-tight text-white`}>E-Skedyul</p>
-        <p className="text-xs font-medium text-white/70">Admin workspace</p>
+        <p className="text-xs font-medium text-white/70">
+          {role === "leader" ? "Coordinator workspace" : "Admin workspace"}
+        </p>
       </div>
     </div>
   )
 }
 
-function AdminHeader({ title, description, action }: {
+function AdminHeader({ title, description, action, eyebrow = "Administration" }: {
   title: string
   description: string
   action?: React.ReactNode
+  eyebrow?: string
 }) {
   return (
     <div className="flex flex-col gap-5 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
       <div>
-        <p className="text-xs font-bold uppercase tracking-widest text-gold">Administration</p>
+        <p className="text-xs font-bold uppercase tracking-widest text-gold">{eyebrow}</p>
         <p className="mt-2 text-2xl font-extrabold tracking-tight text-navy sm:text-3xl">{title}</p>
         <p className="mt-2 max-w-2xl text-base leading-relaxed text-muted">{description}</p>
       </div>
@@ -158,9 +175,10 @@ function EmptyState({ title, detail, action }: { title: string; detail: string; 
   )
 }
 
-function Dashboard({ admin, onEvents }: {
+function Dashboard({ admin, onEvents, scoped }: {
   admin: ReturnType<typeof useAdmin>
   onEvents: () => void
+  scoped: boolean
 }) {
   const nextEvents = admin.events
     .filter(event => event.status === "published")
@@ -170,11 +188,18 @@ function Dashboard({ admin, onEvents }: {
   return (
     <div className="space-y-7">
       <AdminHeader
+        eyebrow={scoped ? "Coordination" : "Administration"}
         title="Dashboard"
-        description="Manage your organizations and events from one workspace."
+        description={scoped
+          ? "Plan and organise the events of the ministries you coordinate."
+          : "Manage your organizations and events from one workspace."}
       />
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-        <MetricCard label="Active organizations" value={admin.metrics.activeOrganizations} detail="Ready to publish events" />
+        <MetricCard
+          label={scoped ? "My ministries" : "Active organizations"}
+          value={admin.metrics.activeOrganizations}
+          detail={scoped ? "Under your coordination" : "Ready to publish events"}
+        />
         <MetricCard label="Published events" value={admin.metrics.publishedEvents} detail="Visible to participants" />
         <MetricCard label="Upcoming" value={admin.metrics.upcomingEvents} detail="Scheduled ahead" />
         <MetricCard label="Drafts" value={admin.metrics.draftEvents} detail="Waiting for review" />
@@ -183,7 +208,11 @@ function Dashboard({ admin, onEvents }: {
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <p className="text-xl font-bold text-text">Upcoming events</p>
-            <p className="mt-1 text-sm text-muted">The next published activities across organizations.</p>
+            <p className="mt-1 text-sm text-muted">
+              {scoped
+                ? "The next published activities in your ministries."
+                : "The next published activities across organizations."}
+            </p>
           </div>
           <Button variant="ghost" size="compact" fullWidth={false} onClick={onEvents} className="shrink-0 whitespace-nowrap">View all</Button>
         </div>
@@ -279,10 +308,11 @@ function JoinRequestList({ requests, onApprove, onReject }: {
   )
 }
 
-function OrganizationList({ admin, onCreate, onOpen }: {
+function OrganizationList({ admin, onCreate, onOpen, scoped }: {
   admin: ReturnType<typeof useAdmin>
   onCreate: () => void
   onOpen: (id: string) => void
+  scoped: boolean
 }) {
   const [query, setQuery] = useState("")
   const [status, setStatus] = useState<"all" | OrganizationStatus>("all")
@@ -299,15 +329,18 @@ function OrganizationList({ admin, onCreate, onOpen }: {
   return (
     <div className="space-y-6">
       <AdminHeader
-        title="Organizations"
-        description="Create and maintain the organizations that own your events."
-        action={<Button fullWidth={false} size="compact" onClick={onCreate}>Create organization</Button>}
+        eyebrow={scoped ? "Coordination" : "Administration"}
+        title={scoped ? "My ministries" : "Organizations"}
+        description={scoped
+          ? "The ministries you coordinate. You can add and organise their events; an administrator manages the ministry profile."
+          : "Create and maintain the organizations that own your events."}
+        action={scoped ? undefined : <Button fullWidth={false} size="compact" onClick={onCreate}>Create organization</Button>}
       />
       <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
         <div className="grid gap-4 lg:grid-cols-[1fr_auto_auto] lg:items-end">
           <InputField
             id="organization-search"
-            label="Search organizations"
+            label={scoped ? "Search my ministries" : "Search organizations"}
             value={query}
             onChange={setQuery}
             placeholder="Search by name"
@@ -341,7 +374,7 @@ function OrganizationList({ admin, onCreate, onOpen }: {
       {organizations.length ? (
         <div className="overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
           <div className="hidden grid-cols-[1.5fr_1fr_1fr_auto] gap-4 border-b border-border bg-bg px-5 py-3 text-xs font-bold uppercase tracking-wide text-muted md:grid">
-            <p>Organization</p><p>Category</p><p>Events</p><p>Status</p>
+            <p>{scoped ? "Ministry" : "Organization"}</p><p>Category</p><p>Events</p><p>Status</p>
           </div>
           <div className="divide-y divide-border">
             {organizations.map(organization => (
@@ -363,9 +396,14 @@ function OrganizationList({ admin, onCreate, onOpen }: {
           </div>
         </div>
       ) : admin.loading ? (
-        <EmptyState title="Loading organizations" detail="Reading the organizations from your workspace." />
+        <EmptyState title={scoped ? "Loading your ministries" : "Loading organizations"} detail="Reading the ministries from your workspace." />
       ) : admin.organizations.length ? (
-        <EmptyState title="No organizations found" detail="Try another search term or status filter." />
+        <EmptyState title={scoped ? "No ministries found" : "No organizations found"} detail="Try another search term or status filter." />
+      ) : scoped ? (
+        <EmptyState
+          title="No ministries yet"
+          detail="An administrator appoints you as coordinator of a ministry you belong to. Once appointed, it appears here."
+        />
       ) : (
         <EmptyState
           title="No organizations yet"
@@ -377,12 +415,13 @@ function OrganizationList({ admin, onCreate, onOpen }: {
   )
 }
 
-function OrganizationDetails({ organization, admin, onBack, onEdit, onCreateEvent }: {
+function OrganizationDetails({ organization, admin, onBack, onEdit, onCreateEvent, scoped }: {
   organization: Organization
   admin: ReturnType<typeof useAdmin>
   onBack: () => void
   onEdit: () => void
   onCreateEvent: () => void
+  scoped: boolean
 }) {
   const organizationEvents = admin.events.filter(event => event.organizationId === organization.id)
 
@@ -404,8 +443,11 @@ function OrganizationDetails({ organization, admin, onBack, onEdit, onCreateEven
 
   return (
     <div className="space-y-6">
-      <Button variant="ghost" size="compact" fullWidth={false} onClick={onBack}>Back to organizations</Button>
+      <Button variant="ghost" size="compact" fullWidth={false} onClick={onBack}>
+        {scoped ? "Back to my ministries" : "Back to organizations"}
+      </Button>
       <AdminHeader
+        eyebrow={scoped ? "Coordination" : "Administration"}
         title={organization.name}
         description={`${organization.category} · Created ${new Intl.DateTimeFormat("en-PH", { dateStyle: "medium" }).format(new Date(organization.createdAt))}`}
         action={<StatusBadge status={organization.status} />}
@@ -436,21 +478,39 @@ function OrganizationDetails({ organization, admin, onBack, onEdit, onCreateEven
           </div>
         </div>
         <div className="rounded-2xl border border-border bg-white p-5 shadow-sm">
-          <p className="text-lg font-bold text-text">Actions</p>
-          <div className="mt-4 flex flex-col gap-3">
-            <Button onClick={onEdit}>Edit organization</Button>
-            <Button variant="secondary" onClick={onCreateEvent} disabled={organization.status === "inactive"}>
-              Create event
-            </Button>
-            <Button variant="ghost" onClick={toggleStatus}>
-              {organization.status === "active" ? "Deactivate organization" : "Reactivate organization"}
-            </Button>
-            <Button variant="danger" onClick={remove}>Delete organization</Button>
-          </div>
-          {organization.status === "inactive" && (
-            <p className="mt-4 rounded-xl bg-gold-light p-3 text-sm font-medium text-gold">
-              New events cannot be created while this organization is inactive.
-            </p>
+          <p className="text-lg font-bold text-text">{scoped ? "Coordinator access" : "Actions"}</p>
+          {scoped ? (
+            <div className="mt-4 flex flex-col gap-3">
+              <p className="rounded-xl bg-bg p-3 text-sm leading-relaxed text-muted">
+                You can add and organise events for this ministry. Only an administrator can change
+                the ministry profile, its status, or its coordinators.
+              </p>
+              <Button variant="secondary" onClick={onCreateEvent} disabled={organization.status === "inactive"}>
+                Create event
+              </Button>
+              {organization.status === "inactive" && (
+                <p className="rounded-xl bg-gold-light p-3 text-sm font-medium text-gold">
+                  This ministry is inactive, so new events cannot be created until an administrator
+                  reactivates it.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="mt-4 flex flex-col gap-3">
+              <Button onClick={onEdit}>Edit organization</Button>
+              <Button variant="secondary" onClick={onCreateEvent} disabled={organization.status === "inactive"}>
+                Create event
+              </Button>
+              <Button variant="ghost" onClick={toggleStatus}>
+                {organization.status === "active" ? "Deactivate organization" : "Reactivate organization"}
+              </Button>
+              <Button variant="danger" onClick={remove}>Delete organization</Button>
+              {organization.status === "inactive" && (
+                <p className="mt-1 rounded-xl bg-gold-light p-3 text-sm font-medium text-gold">
+                  New events cannot be created while this organization is inactive.
+                </p>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -543,10 +603,11 @@ function OrganizationForm({ initial, onCancel, onSave }: {
   )
 }
 
-function EventList({ admin, onCreate, onEdit }: {
+function EventList({ admin, onCreate, onEdit, scoped }: {
   admin: ReturnType<typeof useAdmin>
   onCreate: () => void
   onEdit: (id: string) => void
+  scoped: boolean
 }) {
   const [query, setQuery] = useState("")
   const [status, setStatus] = useState<"all" | EventStatus>("all")
@@ -573,8 +634,11 @@ function EventList({ admin, onCreate, onEdit }: {
   return (
     <div className="space-y-6">
       <AdminHeader
+        eyebrow={scoped ? "Coordination" : "Administration"}
         title="Events"
-        description="Plan, publish, duplicate, and maintain events across organizations."
+        description={scoped
+          ? "Add and organise the events of the ministries you coordinate."
+          : "Plan, publish, duplicate, and maintain events across organizations."}
         action={<Button fullWidth={false} size="compact" onClick={onCreate}>Create event</Button>}
       />
       <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
@@ -634,7 +698,9 @@ function EventList({ admin, onCreate, onEdit }: {
       ) : (
         <EmptyState
           title="No events yet"
-          detail="Create an event for one of your organizations to start scheduling."
+          detail={scoped
+            ? "Create an event for one of the ministries you coordinate to start scheduling."
+            : "Create an event for one of your organizations to start scheduling."}
           action={<Button fullWidth={false} size="compact" onClick={onCreate}>Create event</Button>}
         />
       )}
@@ -642,14 +708,20 @@ function EventList({ admin, onCreate, onEdit }: {
   )
 }
 
-function EventForm({ initial, organizationId, admin, onCancel, onSaved }: {
+function EventForm({ initial, organizationId, admin, onCancel, onSaved, scoped }: {
   initial?: AdminEvent
   organizationId?: string
   admin: ReturnType<typeof useAdmin>
   onCancel: () => void
   onSaved: () => void
+  scoped: boolean
 }) {
   const activeOrganizations = admin.organizations.filter(organization => organization.status === "active")
+  // An event that already belongs to a now-inactive ministry can still be
+  // edited; it just cannot be moved to another inactive one.
+  const selectableOrganizations = initial && !activeOrganizations.some(organization => organization.id === initial.organizationId)
+    ? [...activeOrganizations, ...admin.organizations.filter(organization => organization.id === initial.organizationId)]
+    : activeOrganizations
   const defaultOrganization = organizationId || initial?.organizationId || activeOrganizations[0]?.id || ""
   const [form, setForm] = useState<EventDraft>(initial ?? emptyEvent(defaultOrganization))
   const [startDate, startTime] = splitDateTime(form.startsAt)
@@ -703,7 +775,11 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved }: {
       setError("Capacity must be at least 1.")
       return
     }
-    admin.saveEvent({ ...form, status }, initial?.id)
+    const result = admin.saveEvent({ ...form, status }, initial?.id)
+    if (!result.ok) {
+      setError(result.message || "Unable to save the event.")
+      return
+    }
     onSaved()
   }
 
@@ -711,26 +787,38 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved }: {
     <div className="mx-auto max-w-4xl space-y-6">
       <Button variant="ghost" size="compact" fullWidth={false} onClick={onCancel}>Back to Events</Button>
       <AdminHeader
+        eyebrow={scoped ? "Coordination" : "Administration"}
         title={initial ? "Edit event" : "Create event"}
-        description="Add the core schedule, location, registration, and publishing details."
+        description={scoped
+          ? "Add the schedule, location, registration, and publishing details for this ministry event."
+          : "Add the core schedule, location, registration, and publishing details."}
       />
       <div className="rounded-2xl border border-border border-t-4 border-t-gold bg-white p-5 shadow-sm sm:p-6">
         <div>
-          <p className="text-sm font-semibold text-text">Organization</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {activeOrganizations.map(organization => (
-              <Button
-                key={organization.id}
-                variant={form.organizationId === organization.id ? "tabActive" : "tabInactive"}
-                size="compact"
-                fullWidth={false}
-                onClick={() => update("organizationId", organization.id)}
-                className={form.organizationId === organization.id ? "ring-2 ring-navy" : "border border-border"}
-              >
-                {organization.name}
-              </Button>
-            ))}
-          </div>
+          <p className="text-sm font-semibold text-text">{scoped ? "Ministry" : "Organization"}</p>
+          {selectableOrganizations.length ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {selectableOrganizations.map(organization => (
+                <Button
+                  key={organization.id}
+                  variant={form.organizationId === organization.id ? "tabActive" : "tabInactive"}
+                  size="compact"
+                  fullWidth={false}
+                  onClick={() => update("organizationId", organization.id)}
+                  className={form.organizationId === organization.id ? "ring-2 ring-navy" : "border border-border"}
+                >
+                  {organization.name}
+                  {organization.status === "inactive" ? " (inactive)" : ""}
+                </Button>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 rounded-xl bg-gold-light p-3 text-sm leading-relaxed text-gold">
+              {scoped
+                ? "You have no active ministry to schedule yet. Ask an administrator to activate your ministry."
+                : "There is no active organization to schedule. Activate or create an organization first."}
+            </p>
+          )}
         </div>
         <div className="mt-6 grid gap-5 sm:grid-cols-2">
           <div className="sm:col-span-2">
@@ -793,15 +881,32 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved }: {
   )
 }
 
-export function AdminScreen({ onLogout, adminName, requests, requestError, onApproveRequest, onRejectRequest }: {
+export function AdminScreen({
+  onLogout,
+  logoutLabel = "Sign out",
+  adminName,
+  requests,
+  requestError,
+  onApproveRequest,
+  onRejectRequest,
+  role = "admin",
+  leaderOrganizationIds = [],
+}: {
   onLogout: () => void
+  /** What leaving the workspace means: a sign out, or a coordinator's way back. */
+  logoutLabel?: string
   adminName?: string
   requests: JoinRequest[]
   requestError?: string
   onApproveRequest: (id: string) => void
   onRejectRequest: (id: string) => void
+  role?: AdminWorkspaceRole
+  /** The ministries a coordinator is allowed to see and schedule. */
+  leaderOrganizationIds?: string[]
 }) {
-  const admin = useAdmin()
+  const scoped = role === "leader"
+  const admin = useAdmin(scoped ? { organizationIds: leaderOrganizationIds } : {})
+  const sections = scoped ? COORDINATOR_SECTIONS : ADMIN_SECTIONS
   const [view, setView] = useState<AdminView>({ name: "section", section: "dashboard" })
 
   const activeSection: AdminSection =
@@ -816,7 +921,7 @@ export function AdminScreen({ onLogout, adminName, requests, requestError, onApp
   }
 
   let content: React.ReactNode
-  if (view.name === "organization-form") {
+  if (view.name === "organization-form" && !scoped) {
     const initial = view.id ? admin.organizations.find(organization => organization.id === view.id) : undefined
     content = (
       <OrganizationForm
@@ -835,6 +940,7 @@ export function AdminScreen({ onLogout, adminName, requests, requestError, onApp
       <OrganizationDetails
         organization={organization}
         admin={admin}
+        scoped={scoped}
         onBack={() => openSection("organizations")}
         onEdit={() => setView({ name: "organization-form", id: organization.id })}
         onCreateEvent={() => setView({ name: "event-form", organizationId: organization.id })}
@@ -847,11 +953,12 @@ export function AdminScreen({ onLogout, adminName, requests, requestError, onApp
         initial={initial}
         organizationId={view.organizationId}
         admin={admin}
+        scoped={scoped}
         onCancel={() => openSection("events")}
         onSaved={() => openSection("events")}
       />
     )
-  } else if (view.name === "section" && view.section === "requests") {
+  } else if (!scoped && view.name === "section" && view.section === "requests") {
     content = (
       <JoinRequestList
         requests={requests}
@@ -859,10 +966,13 @@ export function AdminScreen({ onLogout, adminName, requests, requestError, onApp
         onReject={onRejectRequest}
       />
     )
+  } else if (!scoped && view.name === "section" && view.section === "coordinators") {
+    content = <CoordinatorsSection organizations={admin.organizations} />
   } else if (view.name === "section" && view.section === "dashboard") {
     content = (
       <Dashboard
         admin={admin}
+        scoped={scoped}
         onEvents={() => openSection("events")}
       />
     )
@@ -870,6 +980,7 @@ export function AdminScreen({ onLogout, adminName, requests, requestError, onApp
     content = (
       <OrganizationList
         admin={admin}
+        scoped={scoped}
         onCreate={() => setView({ name: "organization-form" })}
         onOpen={id => setView({ name: "organization", id })}
       />
@@ -878,6 +989,7 @@ export function AdminScreen({ onLogout, adminName, requests, requestError, onApp
     content = (
       <EventList
         admin={admin}
+        scoped={scoped}
         onCreate={() => setView({ name: "event-form" })}
         onEdit={id => setView({ name: "event-form", id })}
       />
@@ -888,16 +1000,16 @@ export function AdminScreen({ onLogout, adminName, requests, requestError, onApp
     <div className="min-h-screen bg-bg text-text">
       <div className="sticky top-0 z-40 border-b border-white/10 bg-navy text-white shadow-sm lg:hidden">
         <div className="flex items-center justify-between px-4 py-4">
-          <AdminBrand compact />
-          <Button variant="ghost" size="compact" fullWidth={false} onClick={onLogout} className="text-white hover:bg-white/10">Sign out</Button>
+          <AdminBrand compact role={role} />
+          <Button variant="ghost" size="compact" fullWidth={false} onClick={onLogout} className="text-white hover:bg-white/10">{logoutLabel}</Button>
         </div>
       </div>
       <div className="mx-auto flex min-h-screen max-w-screen-2xl">
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col bg-navy px-4 py-6 text-white lg:flex">
-          <div className="px-3"><AdminBrand /></div>
+          <div className="px-3"><AdminBrand role={role} /></div>
           <div className="mx-3 mt-6 h-px bg-white/15" />
           <div className="mt-9 flex flex-1 flex-col gap-2">
-            {ADMIN_SECTIONS.map(({ value, label }) => (
+            {sections.map(({ value, label }) => (
               <Button
                 key={value}
                 variant="ghost"
@@ -910,14 +1022,16 @@ export function AdminScreen({ onLogout, adminName, requests, requestError, onApp
             ))}
           </div>
           <div className="border-t border-white/15 pt-4">
-            <p className="px-3 text-sm font-semibold">{adminName?.trim() || "Administrator"}</p>
-            <p className="px-3 text-xs text-white/60">Administrator</p>
-            <Button variant="ghost" size="compact" onClick={onLogout} className="mt-3 justify-start text-white hover:bg-white/10">Sign out</Button>
+            <p className="px-3 text-sm font-semibold">{adminName?.trim() || (scoped ? "Coordinator" : "Administrator")}</p>
+            <p className="px-3 text-xs text-white/60">{scoped ? "Ministry coordinator" : "Administrator"}</p>
+            <Button variant="ghost" size="compact" onClick={onLogout} className="mt-3 justify-start text-white hover:bg-white/10">
+              {logoutLabel}
+            </Button>
           </div>
         </aside>
         <main className="min-w-0 flex-1 px-4 pb-28 pt-6 sm:px-7 lg:px-10 lg:py-9">
           <div className="mx-auto max-w-6xl">
-            {(admin.error || requestError) && (
+            {(admin.error || (!scoped && requestError)) && (
               <div role="alert" className="mb-5 rounded-xl border border-red/30 bg-red-light px-4 py-3 text-sm text-red">
                 {admin.error || requestError}
               </div>
@@ -926,8 +1040,11 @@ export function AdminScreen({ onLogout, adminName, requests, requestError, onApp
           </div>
         </main>
       </div>
-      <nav className="fixed bottom-3 left-3 right-3 z-40 grid grid-cols-4 gap-1 rounded-3xl border border-white/70 bg-white/90 p-2 shadow-xl backdrop-blur-xl backdrop-saturate-150 lg:hidden">
-        {ADMIN_SECTIONS.map(({ value, label }) => (
+      <nav
+        className="fixed bottom-3 left-3 right-3 z-40 grid gap-1 rounded-3xl border border-white/70 bg-white/90 p-2 shadow-xl backdrop-blur-xl backdrop-saturate-150 lg:hidden"
+        style={{ gridTemplateColumns: `repeat(${sections.length}, minmax(0, 1fr))` }}
+      >
+        {sections.map(({ value, label }) => (
           <Button
             key={value}
             variant="ghost"

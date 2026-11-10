@@ -20,9 +20,10 @@ import { SlotList, SlotVolunteerScreen, SlotServingScreen, SlotFilledScreen } fr
 import { useSlots } from "./features/slots/useSlots"
 import { AdminScreen } from "./features/admin/admin"
 import { AdminLoginScreen } from "./features/admin/login"
+import { CoordinatorLoginScreen } from "./features/admin/coordinatorLogin"
 import { useJoinRequests } from "./features/admin/useJoinRequests"
 import { useMyMinistries } from "./features/organizations/useMyMinistries"
-import { logoutAdmin } from "./features/admin/api"
+import { logoutAdmin, getAdminToken } from "./features/admin/api"
 import { AuthScreen } from "./features/auth/AuthScreen"
 import { useAuth } from "./features/auth/AuthContext"
 import { isPlaceholderName } from "./features/auth/types"
@@ -33,7 +34,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase"
 
 export default function App() {
-  const { user, profile, loading, signOut, completeOnboarding } = useAuth()
+  const { user, profile, loading, signOut, completeOnboarding, refreshProfile } = useAuth()
   const isDesktop = useIsDesktop()
   const [screen, setScreen] = useState<Screen>("welcome")
   const [prevScreen, setPrevScreen] = useState<Screen>("welcome")
@@ -43,6 +44,10 @@ export default function App() {
   const [authNotice, setAuthNotice] = useState("")
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [dashboardReturnScreen, setDashboardReturnScreen] = useState<"home" | "admin">("home")
+
+  /** The signed-in account's workspace role; coordinator access is appointment-based. */
+  const workspaceRole = profile?.role === "leader" ? "leader" : "admin"
+  const isCoordinator = profile?.role === "leader"
 
   const [homeTab, setHomeTab] = useState<HomeTab>("availability")
   // The ministries belong to the signed-in member; the selection is just an id.
@@ -70,13 +75,24 @@ export default function App() {
     void refreshMinistriesRef.current()
   }, [screen])
 
+  // An administrator can appoint (or remove) this account as a coordinator while
+  // it is signed in, so the dashboard re-reads the role and appointments too.
+  const refreshProfileRef = useRef(refreshProfile)
+  refreshProfileRef.current = refreshProfile
+  useEffect(() => {
+    if (screen !== "home") return
+    void refreshProfileRef.current()
+  }, [screen])
+
   // The review queue is shared with members, so re-read it on every visit.
   const refreshJoinRequestsRef = useRef(joinRequests.refresh)
   refreshJoinRequestsRef.current = joinRequests.refresh
   useEffect(() => {
     if (!adminAuthenticated || screen !== "admin") return
+    // Coordinators do not review join requests; that stays administrator-only.
+    if (profile?.role !== "admin") return
     void refreshJoinRequestsRef.current()
-  }, [adminAuthenticated, screen])
+  }, [adminAuthenticated, screen, profile?.role])
 
   useEffect(() => {
     if (screen !== "pending") return
@@ -101,6 +117,31 @@ export default function App() {
     setMinistryId("")
     availability.resetPosition()
     go("welcome")
+  }
+
+  /**
+   * Opens the workspace after the sign-in screen already verified the account.
+   * The screen itself is role-aware: an administrator gets every section, a
+   * coordinator only their own ministries and events.
+   */
+  function enterWorkspace() {
+    setAdminAuthenticated(true)
+    go("admin")
+  }
+
+  /**
+   * Opens the workspace from the member dashboard. The profile is re-read first
+   * because an administrator may have appointed (or removed) this coordinator
+   * while the member was already signed in.
+   */
+  async function openWorkspace() {
+    const fresh = await refreshProfile()
+    const role = fresh?.role ?? profile?.role
+    if (role !== "admin" && role !== "leader") {
+      go("home")
+      return
+    }
+    enterWorkspace()
   }
 
   /** Opens the account screen on the requested tab (sign in or create account). */
@@ -130,12 +171,20 @@ export default function App() {
   prevScreenRef.current = prevScreen
   const dashboardReturnScreenRef = useRef(dashboardReturnScreen)
   dashboardReturnScreenRef.current = dashboardReturnScreen
+  const isCoordinatorRef = useRef(isCoordinator)
+  isCoordinatorRef.current = isCoordinator
   const goRef = useRef(go)
   goRef.current = go
   useEffect(() => listenForBackButton(BACK_TARGETS, () => screenRef.current, () => prevScreenRef.current, to => {
     const current = screenRef.current
     if (current === "set-recurring" || current === "add-override" || current.startsWith("slot-")) {
       goRef.current(dashboardReturnScreenRef.current)
+      return
+    }
+    // A coordinator's workspace is entered from their member dashboard, not
+    // from the administrator sign-in screen.
+    if (current === "admin" && isCoordinatorRef.current) {
+      goRef.current("home")
       return
     }
     goRef.current(to)
@@ -198,6 +247,10 @@ export default function App() {
           void signOut()
           reset()
         }}
+        isAdmin={profile?.role === "admin"}
+        onAdmin={openWorkspace}
+        isLeader={profile?.role === "leader"}
+        onLeader={openWorkspace}
         embedded={embedded}
       >
         {homeTab === "availability" ? (
@@ -246,6 +299,7 @@ export default function App() {
           }}
           onSignIn={() => startAuth("signin")}
           onAdmin={() => go("admin-login")}
+          onCoordinator={() => go("coordinator-login")}
         />
       )
 
@@ -261,6 +315,10 @@ export default function App() {
           onAdmin={() => {
             setAuthNotice("")
             go("admin-login")
+          }}
+          onCoordinator={() => {
+            setAuthNotice("")
+            go("coordinator-login")
           }}
           onSkip={() => go("tell-name")}
           onSuccess={(signedInProfile, mode) => {
@@ -286,14 +344,28 @@ export default function App() {
       return (
         <AdminLoginScreen
           onBack={() => go("welcome")}
-          onAuthenticated={() => {
-            setAdminAuthenticated(true)
-            go("admin")
-          }}
+          onAuthenticated={() => enterWorkspace()}
+          onCoordinator={() => go("coordinator-login")}
+        />
+      )
+
+    case "coordinator-login":
+      return (
+        <CoordinatorLoginScreen
+          onBack={() => go("welcome")}
+          onAuthenticated={() => enterWorkspace()}
+          onAdmin={() => go("admin-login")}
         />
       )
 
     case "admin":
+      // A member who is not (or is no longer) an administrator or coordinator
+      // never sees a workspace: RLS would refuse the data, and the account has
+      // no reason to be here. An administrator signed in through the optional
+      // FastAPI backend holds that token instead of a workspace role.
+      if (profile?.role === "member" && !getAdminToken()) {
+        return renderMemberDashboard()
+      }
       return adminAuthenticated ? (
         <AdminScreen
           adminName={profile?.fullName}
@@ -301,8 +373,17 @@ export default function App() {
           requestError={joinRequests.apiError}
           onApproveRequest={joinRequests.approveRequest}
           onRejectRequest={joinRequests.rejectRequest}
+          role={workspaceRole}
+          leaderOrganizationIds={profile?.leaderOrganizations.map(ministry => ministry.id) ?? []}
+          logoutLabel={isCoordinator ? "My member dashboard" : "Sign out"}
           onLogout={() => {
             setAdminAuthenticated(false)
+            // A coordinator is a member first: leaving the workspace returns to
+            // their schedule instead of ending the session.
+            if (isCoordinator) {
+              go("home")
+              return
+            }
             void logoutAdmin()
             // An administrator who signed in through Supabase also holds a
             // Supabase session; end it so a reload does not reopen the workspace.
@@ -310,13 +391,17 @@ export default function App() {
             go("welcome")
           }}
         />
+      ) : profile?.role === "leader" ? (
+        <CoordinatorLoginScreen
+          onBack={() => go("welcome")}
+          onAuthenticated={() => enterWorkspace()}
+          onAdmin={() => go("admin-login")}
+        />
       ) : (
         <AdminLoginScreen
           onBack={() => go("welcome")}
-          onAuthenticated={() => {
-            setAdminAuthenticated(true)
-            go("admin")
-          }}
+          onAuthenticated={() => enterWorkspace()}
+          onCoordinator={() => go("coordinator-login")}
         />
       )
 

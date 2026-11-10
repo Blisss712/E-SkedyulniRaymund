@@ -17,10 +17,13 @@ WHERE table_schema = 'public'
   AND table_name IN (
     'organizations',
     'organization_member_accounts',
+    'organization_leaders',
     'organization_join_requests'
   )
 ORDER BY table_name;
--- Expect three rows. If one is missing, run supabase/schema.sql.
+-- Expect four rows. If organization_leaders is missing, run
+-- supabase/organization_leaders.sql (or the latest schema.sql) to enable
+-- ministry coordinators.
 
 -- ------------------------------------------------------------------------------
 -- 2) Columns. Check `column_default` on the two NOT NULL columns the app does
@@ -36,6 +39,7 @@ WHERE table_schema = 'public'
   AND table_name IN (
     'organizations',
     'organization_member_accounts',
+    'organization_leaders',
     'organization_join_requests'
   )
 ORDER BY table_name, ordinal_position;
@@ -49,10 +53,11 @@ WHERE relnamespace = 'public'::regnamespace
   AND relname IN (
     'organizations',
     'organization_member_accounts',
+    'organization_leaders',
     'organization_join_requests'
   )
 ORDER BY relname;
--- Expect rls_enabled = true for all three.
+-- Expect rls_enabled = true for all four.
 
 -- ------------------------------------------------------------------------------
 -- 4) The policies each screen depends on.
@@ -63,6 +68,7 @@ WHERE schemaname = 'public'
   AND tablename IN (
     'organizations',
     'organization_member_accounts',
+    'organization_leaders',
     'organization_join_requests'
   )
 ORDER BY tablename, cmd, policyname;
@@ -70,9 +76,13 @@ ORDER BY tablename, cmd, policyname;
 --   organizations
 --     "Public read active organizations"   (SELECT, anon + authenticated)
 --     "Admins full manage organizations"   (ALL, authenticated)
+--     "Coordinators read their ministries" (SELECT, authenticated)
 --   organization_member_accounts
 --     "Members read own memberships"       (SELECT)
 --     "Admins full manage memberships"     (ALL)
+--   organization_leaders
+--     "Coordinators read own appointments" (SELECT)
+--     "Admins manage coordinator appointments" (ALL)
 --   organization_join_requests
 --     "Members insert own join requests"   (INSERT)
 --     "Members read own join requests"     (SELECT)
@@ -92,7 +102,7 @@ SELECT
 FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public'
-  AND p.proname IN ('is_admin', 'approve_join_request')
+  AND p.proname IN ('is_admin', 'approve_join_request', 'is_organization_leader')
 ORDER BY p.proname;
 
 -- ------------------------------------------------------------------------------
@@ -103,3 +113,13 @@ ORDER BY p.proname;
 SELECT id, name, category, status, join_code
 FROM public.organizations
 ORDER BY name;
+
+-- ------------------------------------------------------------------------------
+-- 7) The coordinators appointed right now. Each row is one ministry/account
+--    pair; an empty result means no coordinator has been appointed yet.
+-- ------------------------------------------------------------------------------
+SELECT o.name AS ministry, m.full_name AS coordinator, m.email, l.appointed_at
+FROM public.organization_leaders l
+JOIN public.organizations o ON o.id = l.organization_id
+JOIN public.member_profiles m ON m.user_id = l.user_id
+ORDER BY o.name, m.full_name;

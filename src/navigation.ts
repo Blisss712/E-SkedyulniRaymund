@@ -13,7 +13,15 @@ import {
 } from "./features/slots/navigation"
 
 // Every screen in the app. Each feature lists its own screens in its navigation.ts.
-export type Screen = WizardScreen | "auth" | "home" | "admin-login" | "admin" | AvailabilityScreen | SlotsScreen
+export type Screen =
+  | WizardScreen
+  | "auth"
+  | "home"
+  | "admin-login"
+  | "coordinator-login"
+  | "admin"
+  | AvailabilityScreen
+  | SlotsScreen
 
 // Where the Android back button goes from each screen.
 export const BACK_TARGETS: Record<Screen, BackTarget<Screen>> = {
@@ -21,6 +29,7 @@ export const BACK_TARGETS: Record<Screen, BackTarget<Screen>> = {
   auth: "welcome",
   home: "minimize",
   "admin-login": "welcome",
+  "coordinator-login": "welcome",
   admin: "admin-login",
   ...AVAILABILITY_BACK_TARGETS,
   ...SLOTS_BACK_TARGETS,
