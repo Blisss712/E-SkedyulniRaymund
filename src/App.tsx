@@ -24,14 +24,21 @@ import { logoutAdmin } from "./features/admin/api"
 import { AuthScreen } from "./features/auth/AuthScreen"
 import { useAuth } from "./features/auth/AuthContext"
 import { isPlaceholderName } from "./features/auth/types"
+import {
+  authRedirectFailureFromLocation,
+  clearAuthRedirectFailure,
+} from "./features/auth/redirect"
 import { isSupabaseConfigured } from "./lib/supabase"
 
 export default function App() {
-  const { user, profile, loading, signOut } = useAuth()
+  const { user, profile, loading, signOut, completeOnboarding } = useAuth()
   const isDesktop = useIsDesktop()
   const [screen, setScreen] = useState<Screen>("welcome")
   const [prevScreen, setPrevScreen] = useState<Screen>("welcome")
   const [authTab, setAuthTab] = useState<"signin" | "signup">("signin")
+  // Why the last Google/Facebook attempt failed, when the provider sent the
+  // browser back with an error instead of a session.
+  const [authNotice, setAuthNotice] = useState("")
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [dashboardReturnScreen, setDashboardReturnScreen] = useState<"home" | "admin">("home")
 
@@ -137,10 +144,37 @@ export default function App() {
     if (profile.role === "admin") {
       setAdminAuthenticated(true)
       setScreen("admin")
-    } else {
-      setScreen("home")
+      return
     }
+    // A brand-new account — including one that returns from Google or Facebook
+    // with its name already filled in — still needs the setup wizard.
+    if (!profile.onboarded) {
+      setScreen("tell-name")
+      return
+    }
+    setScreen("home")
   }, [loading, user, profile])
+
+  /**
+   * A refused Google/Facebook login comes back as `?error=access_denied...` in
+   * the address bar with no session. Read it once, then strip it so a refresh
+   * does not repeat the message.
+   */
+  useEffect(() => {
+    const failure = authRedirectFailureFromLocation()
+    if (!failure) return
+    setAuthNotice(failure.message)
+    clearAuthRedirectFailure()
+  }, [])
+
+  // Send the member back to the sign-in form with the reason, rather than
+  // leaving them on the welcome screen as if the social login never ran.
+  useEffect(() => {
+    if (loading || !authNotice || user) return
+    if (screenRef.current !== "welcome") return
+    setAuthTab("signin")
+    setScreen("auth")
+  }, [loading, authNotice, user])
 
   function renderMemberDashboard(embedded = false) {
     return (
@@ -211,27 +245,31 @@ export default function App() {
       return (
         <AuthScreen
           defaultTab={authTab}
-          onBack={() => go("welcome")}
-          onAdmin={() => go("admin-login")}
+          notice={authNotice}
+          onBack={() => {
+            setAuthNotice("")
+            go("welcome")
+          }}
+          onAdmin={() => {
+            setAuthNotice("")
+            go("admin-login")
+          }}
           onSkip={() => go("tell-name")}
           onSuccess={(signedInProfile, mode) => {
+            setAuthNotice("")
             if (signedInProfile?.role === "admin") {
               setAdminAuthenticated(true)
               go("admin")
               return
             }
-            if (mode === "signup") {
+            // New accounts (email, phone, Google, Facebook) confirm their name
+            // and enter a group code; only finished accounts go to the dashboard.
+            if (mode === "signup" || !signedInProfile?.onboarded) {
               prefillName(signedInProfile?.fullName)
               go("tell-name")
               return
             }
-            // Returning members go straight back to their dashboard.
-            if (signedInProfile && !isPlaceholderName(signedInProfile.fullName)) {
-              go("home")
-              return
-            }
-            prefillName(signedInProfile?.fullName)
-            go("tell-name")
+            go("home")
           }}
         />
       )
@@ -282,6 +320,9 @@ export default function App() {
           setFirstName={wizard.setFirstName}
           setLastName={wizard.setLastName}
           onContinue={() => {
+            // Persist the confirmed name right away: the dashboard, join
+            // requests, and the next sign-in all read it from the profile.
+            void completeOnboarding(`${wizard.firstName} ${wizard.lastName}`.trim())
             wizard.saveName()
             go("join-group")
           }}

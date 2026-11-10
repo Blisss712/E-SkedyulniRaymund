@@ -100,6 +100,7 @@ export function AuthScreen({
   onAdmin,
   onSkip,
   defaultTab = "signin",
+  notice = "",
 }: {
   onSuccess: (
     profile?: UserProfile,
@@ -109,6 +110,8 @@ export function AuthScreen({
   onAdmin?: () => void
   onSkip?: () => void
   defaultTab?: AuthTab
+  /** Why the last Google/Facebook redirect failed, shown as soon as this screen opens. */
+  notice?: string
 }) {
   const {
     signInWithEmail,
@@ -124,7 +127,7 @@ export function AuthScreen({
   const [password, setPassword] = useState("")
 
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState("")
+  const [error, setError] = useState(notice)
   const [infoMessage, setInfoMessage] = useState("")
 
   const [socialLoading, setSocialLoading] = useState<string | null>(null)
