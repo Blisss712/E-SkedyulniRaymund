@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 import { Button, InputField } from "../../shared/ui"
 import { useAdmin } from "./useAdmin"
 import { CoordinatorsSection } from "./coordinators"
+import { EventsTimeline } from "./eventsTimeline"
 import {
   combineDateTime,
   describeSchedule,
@@ -21,6 +22,7 @@ import type {
   OrganizationStatus,
   Recurrence,
 } from "./types"
+import type { TimetablePosition } from "../availability/types"
 
 export type AdminSection = "dashboard" | "organizations" | "events" | "requests" | "coordinators"
 const ADMIN_SECTIONS: { value: AdminSection; label: string }[] = [
@@ -174,9 +176,11 @@ function EmptyState({ title, detail, action }: { title: string; detail: string; 
   )
 }
 
-function Dashboard({ admin, onEvents, scoped }: {
+function Dashboard({ admin, onEvents, onTimeline, scoped }: {
   admin: ReturnType<typeof useAdmin>
   onEvents: () => void
+  /** Opens the Events section on its timeline view. */
+  onTimeline: () => void
   scoped: boolean
 }) {
   const nextEvents = admin.events
@@ -213,7 +217,10 @@ function Dashboard({ admin, onEvents, scoped }: {
                 : "The next published activities across organizations."}
             </p>
           </div>
-          <Button variant="ghost" size="compact" fullWidth={false} onClick={onEvents} className="shrink-0 whitespace-nowrap">View all</Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button variant="ghost" size="compact" fullWidth={false} onClick={onTimeline} className="whitespace-nowrap">Timeline</Button>
+            <Button variant="ghost" size="compact" fullWidth={false} onClick={onEvents} className="whitespace-nowrap">View all</Button>
+          </div>
         </div>
         <div className="divide-y divide-border">
           {nextEvents.map(event => {
@@ -602,11 +609,16 @@ function OrganizationForm({ initial, onCancel, onSave }: {
   )
 }
 
-function EventList({ admin, onCreate, onEdit, scoped }: {
+function EventList({ admin, onCreate, onEdit, scoped, view, onViewChange, position, onPositionChange }: {
   admin: ReturnType<typeof useAdmin>
   onCreate: () => void
   onEdit: (id: string) => void
   scoped: boolean
+  /** List or timeline; kept by the workspace so an event form returns to it. */
+  view: "list" | "timeline"
+  onViewChange: (view: "list" | "timeline") => void
+  position: TimetablePosition
+  onPositionChange: (change: Partial<TimetablePosition>) => void
 }) {
   const [query, setQuery] = useState("")
   const [status, setStatus] = useState<"all" | EventStatus>("all")
@@ -641,7 +653,7 @@ function EventList({ admin, onCreate, onEdit, scoped }: {
         action={<Button fullWidth={false} size="compact" onClick={onCreate}>Create event</Button>}
       />
       <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
-        <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
+        <div className="grid gap-4 lg:grid-cols-[1fr_auto_auto] lg:items-end">
           <InputField id="event-search" label="Search events" value={query} onChange={setQuery} placeholder="Search by event title" />
           <div>
             <p className="mb-2 text-sm font-semibold text-text">Status</p>
@@ -660,36 +672,71 @@ function EventList({ admin, onCreate, onEdit, scoped }: {
               ))}
             </div>
           </div>
+          <div>
+            <p className="mb-2 text-sm font-semibold text-text">View</p>
+            <div className="flex rounded-xl bg-bg p-1" role="group" aria-label="How to show the schedule">
+              <Button
+                variant={view === "list" ? "tabActive" : "tabInactive"}
+                size="compact"
+                fullWidth={false}
+                onClick={() => onViewChange("list")}
+                ariaPressed={view === "list"}
+                className="min-h-10"
+              >
+                List
+              </Button>
+              <Button
+                variant={view === "timeline" ? "tabActive" : "tabInactive"}
+                size="compact"
+                fullWidth={false}
+                onClick={() => onViewChange("timeline")}
+                ariaPressed={view === "timeline"}
+                className="min-h-10"
+              >
+                Timeline
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
       {events.length ? (
-        <div className="space-y-3">
-          {events.map(event => {
-            const organization = admin.organizations.find(item => item.id === event.organizationId)
-            return (
-              <div key={event.id} className="rounded-2xl border border-border bg-white p-5 shadow-sm">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <p className="text-lg font-bold text-text">{event.title}</p>
-                      <StatusBadge status={event.status} />
+        view === "timeline" ? (
+          <EventsTimeline
+            events={events}
+            organizations={admin.organizations}
+            position={position}
+            onPositionChange={onPositionChange}
+            onEdit={onEdit}
+          />
+        ) : (
+          <div className="space-y-3">
+            {events.map(event => {
+              const organization = admin.organizations.find(item => item.id === event.organizationId)
+              return (
+                <div key={event.id} className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <p className="text-lg font-bold text-text">{event.title}</p>
+                        <StatusBadge status={event.status} />
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-navy">{organization?.name}</p>
+                      <p className="mt-1 text-sm text-muted">{formatEventWhen(event)} · {event.location}</p>
                     </div>
-                    <p className="mt-2 text-sm font-semibold text-navy">{organization?.name}</p>
-                    <p className="mt-1 text-sm text-muted">{formatEventWhen(event)} · {event.location}</p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                    <Button variant="secondary" size="compact" onClick={() => onEdit(event.id)} className="w-full sm:w-auto">Edit</Button>
-                    <Button variant="secondary" size="compact" onClick={() => duplicate(event.id)} className="w-full sm:w-auto">Duplicate</Button>
-                    {event.status !== "cancelled" && (
-                      <Button variant="secondary" size="compact" onClick={() => cancel(event.id)} className="w-full whitespace-nowrap sm:w-auto">Cancel event</Button>
-                    )}
-                    <Button variant="danger" size="compact" onClick={() => remove(event.id)} className="w-full sm:w-auto">Delete</Button>
+                    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+                      <Button variant="secondary" size="compact" onClick={() => onEdit(event.id)} className="w-full sm:w-auto">Edit</Button>
+                      <Button variant="secondary" size="compact" onClick={() => duplicate(event.id)} className="w-full sm:w-auto">Duplicate</Button>
+                      {event.status !== "cancelled" && (
+                        <Button variant="secondary" size="compact" onClick={() => cancel(event.id)} className="w-full whitespace-nowrap sm:w-auto">Cancel event</Button>
+                      )}
+                      <Button variant="danger" size="compact" onClick={() => remove(event.id)} className="w-full sm:w-auto">Delete</Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )
-          })}
-        </div>
+              )
+            })}
+          </div>
+        )
       ) : admin.loading ? (
         <EmptyState title="Loading events" detail="Reading the schedule from your workspace." />
       ) : admin.events.length ? (
@@ -924,6 +971,19 @@ export function AdminScreen({
   const admin = useAdmin(scoped ? { organizationIds: leaderOrganizationIds } : {})
   const sections = scoped ? COORDINATOR_SECTIONS : ADMIN_SECTIONS
   const [view, setView] = useState<AdminView>({ name: "section", section: "dashboard" })
+  // The Events section's list/timeline choice and its place on the timeline are
+  // held here, so opening an event form and saving returns to the same view
+  // instead of falling back to the list of the current week.
+  const [eventsView, setEventsView] = useState<"list" | "timeline">("list")
+  const [timelinePosition, setTimelinePosition] = useState<TimetablePosition>({
+    weekOffset: 0,
+    view: "week",
+    dayIndex: 0,
+  })
+
+  function changeTimelinePosition(change: Partial<TimetablePosition>) {
+    setTimelinePosition(current => ({ ...current, ...change }))
+  }
 
   const activeSection: AdminSection =
     view.name === "section"
@@ -990,6 +1050,10 @@ export function AdminScreen({
         admin={admin}
         scoped={scoped}
         onEvents={() => openSection("events")}
+        onTimeline={() => {
+          setEventsView("timeline")
+          openSection("events")
+        }}
       />
     )
   } else if (view.name === "section" && view.section === "organizations") {
@@ -1006,6 +1070,10 @@ export function AdminScreen({
       <EventList
         admin={admin}
         scoped={scoped}
+        view={eventsView}
+        onViewChange={setEventsView}
+        position={timelinePosition}
+        onPositionChange={changeTimelinePosition}
         onCreate={() => setView({ name: "event-form" })}
         onEdit={id => setView({ name: "event-form", id })}
       />

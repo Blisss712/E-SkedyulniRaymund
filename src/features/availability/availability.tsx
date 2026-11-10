@@ -9,13 +9,16 @@ import type {
 
 import { DAYS_ORDER } from "./data"
 
-import { Button, useSheetClose } from "../../shared/ui"
+import { useSheetClose } from "../../shared/ui"
 
 import { slotTimeTo24h, type Slot } from "../../shared/slot"
 
 import {
   WeeklyTimetable,
+  WeekNav,
   addDaysTo,
+  dayInWeek,
+  localDateKey,
   mondayOf,
   type TimetableEvent,
 } from "./timetable"
@@ -81,23 +84,6 @@ function addMinutes(time: string, minutes: number): string {
   const total = hour * 60 + minute + minutes
 
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`
-}
-
-/** Which timetable day (0 = Monday … 6 = Sunday) a "YYYY-MM-DD" date falls on in the week starting `weekStart`, or -1 if outside it. */
-
-function dayInWeek(date: string, weekStart: Date): number {
-  const day = Math.round(
-    (new Date(date + "T12:00:00").getTime() - weekStart.getTime()) / 86_400_000,
-  )
-
-  return day >= 0 && day <= 6 ? day : -1
-}
-
-function localDateKey(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, "0")
-  const day = String(date.getDate()).padStart(2, "0")
-  return `${year}-${month}-${day}`
 }
 
 /**
@@ -680,63 +666,6 @@ function CalendarIcon() {
         strokeLinecap="round"
       />
     </svg>
-  )
-}
-
-function WeekNav({
-  weekOffset,
-  weekStart,
-  onPositionChange,
-}: {
-  weekOffset: number
-
-  weekStart: Date
-
-  onPositionChange: (change: Partial<TimetablePosition>) => void
-}) {
-  const weekEnd = addDaysTo(weekStart, 6)
-
-  return (
-    <>
-      <div className="my-4 grid grid-cols-3 gap-1">
-        <Button
-          variant="ghost"
-          size="compact"
-          onClick={() => onPositionChange({ weekOffset: weekOffset - 1 })}
-          ariaLabel="Previous week"
-        >
-          ‹ Previous
-        </Button>
-        <Button
-          variant={weekOffset === 0 ? "secondary" : "ghost"}
-          size="compact"
-          onClick={() => onPositionChange({ weekOffset: 0 })}
-          className="whitespace-nowrap"
-        >
-          This Week
-        </Button>
-        <Button
-          variant="ghost"
-          size="compact"
-          onClick={() => onPositionChange({ weekOffset: weekOffset + 1 })}
-          ariaLabel="Next week"
-        >
-          Next ›
-        </Button>
-      </div>
-      <p className="mb-4 text-center text-[19px] font-extrabold text-[#1B3A6B]">
-        {weekStart.toLocaleDateString("en-US", {
-          month: "long",
-          day: "numeric",
-        })}{" "}
-        –{" "}
-        {weekEnd.toLocaleDateString("en-US", {
-          month: "long",
-          day: "numeric",
-          year: "numeric",
-        })}
-      </p>
-    </>
   )
 }
 
