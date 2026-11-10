@@ -18,9 +18,10 @@ const clientKey = isSupabaseConfigured ? supabaseAnonKey : "placeholder-key"
 
 export const supabase = createClient(clientUrl, clientKey, {
   auth: {
-    // Do not reopen the app in a previous administrator or member session.
-    // Authentication remains active for the current app session.
-    persistSession: false,
+    // Keep the member session across reloads so "Sign in" actually returns the
+    // user to their account. The administrator workspace still requires a fresh
+    // sign-in because its access is held in app state, not the Supabase session.
+    persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
   },

@@ -217,7 +217,12 @@ BEGIN
           NULLIF(TRIM(NEW.raw_user_meta_data->>'full_name'), ''),
           NULLIF(TRIM(NEW.raw_user_meta_data->>'name'), ''),
           NULLIF(TRIM(COALESCE(NEW.raw_user_meta_data->>'first_name', '') || ' ' || COALESCE(NEW.raw_user_meta_data->>'last_name', '')), ''),
-          TRIM(split_part(NEW.email, '@', 1))
+          -- Phone (SMS OTP) sign-ups have no email address. Fall back to the phone
+          -- number so full_name never receives NULL (NOT NULL column) and the
+          -- auth.users insert does not fail with "Database error saving new user".
+          NULLIF(TRIM(split_part(COALESCE(NEW.email, ''), '@', 1)), ''),
+          NULLIF(TRIM(COALESCE(NEW.phone, '')), ''),
+          'Member'
         ),
         TRUE
     )
@@ -374,6 +379,135 @@ BEGIN
 END;
 $$;
 
+-- make_admin() writes administrator rows directly and therefore bypasses RLS.
+-- It must never be callable with the public anon key, so only the SQL editor
+-- (postgres), the service role, and the FastAPI backend keep access.
+DO $$
+BEGIN
+    IF to_regprocedure('public.make_admin(text,text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.make_admin(TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+        GRANT EXECUTE ON FUNCTION public.make_admin(TEXT, TEXT) TO service_role;
+    END IF;
+END;
+$$;
+
+-- ------------------------------------------------------------------------------
+-- 6A. SELF-SERVICE ADMINISTRATOR ACTIVATION
+-- ------------------------------------------------------------------------------
+-- A signed-in member can promote their own email account with a setup code, so
+-- nobody needs SQL editor or service-role access to activate an administrator.
+
+CREATE TABLE IF NOT EXISTS public.admin_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.admin_settings ENABLE ROW LEVEL SECURITY;
+-- No RLS policies on purpose: only the SECURITY DEFINER helper below and the
+-- SQL editor / service role may read the setup code.
+REVOKE ALL ON TABLE public.admin_settings FROM anon, authenticated;
+GRANT ALL ON TABLE public.admin_settings TO service_role;
+
+INSERT INTO public.admin_settings (key, value)
+VALUES ('admin_promotion_code', 'ESK-' || upper(substr(encode(gen_random_bytes(6), 'hex'), 1, 12)))
+ON CONFLICT (key) DO NOTHING;
+
+CREATE OR REPLACE FUNCTION public.promote_current_user_to_admin(
+    p_code TEXT,
+    p_username TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+    v_uid UUID := auth.uid();
+    v_email TEXT;
+    v_meta_name TEXT;
+    v_expected_code TEXT;
+    v_base_username TEXT;
+    v_username TEXT;
+    v_counter INT := 1;
+    v_profile public.admin_profiles;
+BEGIN
+    IF v_uid IS NULL THEN
+        RAISE EXCEPTION 'Sign in with your E-Skedyul account before activating administrator access.';
+    END IF;
+
+    SELECT value INTO v_expected_code
+    FROM public.admin_settings
+    WHERE key = 'admin_promotion_code';
+
+    IF v_expected_code IS NULL THEN
+        RAISE EXCEPTION 'Administrator activation is not configured. Run supabase/admin_setup.sql in the Supabase SQL editor.';
+    END IF;
+
+    IF p_code IS NULL OR btrim(p_code) = '' OR btrim(p_code) <> v_expected_code THEN
+        RAISE EXCEPTION 'The administrator setup code is not valid.';
+    END IF;
+
+    SELECT lower(email),
+           COALESCE(
+               nullif(btrim(raw_user_meta_data->>'full_name'), ''),
+               nullif(btrim(raw_user_meta_data->>'name'), '')
+           )
+    INTO v_email, v_meta_name
+    FROM auth.users
+    WHERE id = v_uid;
+
+    IF v_email IS NULL OR v_email = '' THEN
+        RAISE EXCEPTION 'This account has no email address, so it cannot be promoted to administrator.';
+    END IF;
+
+    v_base_username := COALESCE(nullif(btrim(p_username), ''), split_part(v_email, '@', 1));
+
+    IF v_base_username !~ '^[A-Za-z0-9._-]{3,80}$' THEN
+        RAISE EXCEPTION 'Choose an admin username of 3-80 characters using letters, numbers, dots, dashes, or underscores.';
+    END IF;
+
+    -- Keep usernames unique without failing the promotion
+    v_username := v_base_username;
+    WHILE EXISTS (
+        SELECT 1 FROM public.admin_profiles
+        WHERE lower(username) = lower(v_username)
+          AND user_id <> v_uid
+    ) LOOP
+        v_counter := v_counter + 1;
+        v_username := v_base_username || v_counter::text;
+    END LOOP;
+
+    INSERT INTO public.admin_profiles (user_id, username, email, full_name, role, active)
+    VALUES (
+        v_uid,
+        v_username,
+        v_email,
+        COALESCE(v_meta_name, 'Administrator'),
+        'admin',
+        TRUE
+    )
+    ON CONFLICT (user_id) DO UPDATE
+    SET role = 'admin',
+        active = TRUE,
+        email = EXCLUDED.email,
+        username = EXCLUDED.username,
+        full_name = CASE
+            WHEN btrim(public.admin_profiles.full_name) = '' THEN EXCLUDED.full_name
+            ELSE public.admin_profiles.full_name
+        END
+    RETURNING * INTO v_profile;
+
+    RETURN to_jsonb(v_profile);
+EXCEPTION
+    WHEN unique_violation THEN
+        RAISE EXCEPTION 'Another administrator profile already uses this email address or username.';
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.promote_current_user_to_admin(TEXT, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.promote_current_user_to_admin(TEXT, TEXT) TO authenticated;
+
 -- ------------------------------------------------------------------------------
 -- 7. ROW LEVEL SECURITY (RLS) POLICIES
 -- ------------------------------------------------------------------------------
@@ -414,6 +548,14 @@ DROP POLICY IF EXISTS "Update own member profile" ON public.member_profiles;
 CREATE POLICY "Update own member profile" ON public.member_profiles
 FOR UPDATE TO authenticated
 USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+-- Availability, slot sign-ups, and join requests reference member_profiles(user_id).
+-- The handle_new_user() trigger normally creates the row, but a member must also be
+-- able to repair it from the client if the trigger was never installed.
+DROP POLICY IF EXISTS "Create own member profile" ON public.member_profiles;
+CREATE POLICY "Create own member profile" ON public.member_profiles
+FOR INSERT TO authenticated
 WITH CHECK (user_id = auth.uid());
 
 -- Organizations
@@ -701,7 +843,16 @@ ON CONFLICT (id) DO NOTHING;
 -- ------------------------------------------------------------------------------
 -- 9. ADMIN ACCOUNT PROVISIONING (RUN SEPARATELY ONCE AS NEEDED)
 -- ------------------------------------------------------------------------------
--- After running this schema:
+-- Option A - self-service (no SQL editor access needed for each new admin):
+-- 1. Read the setup code once:
+--    SELECT value FROM public.admin_settings WHERE key = 'admin_promotion_code';
+-- 2. In the app: Welcome -> Sign in as Admin -> "Activate admin access", then
+--    enter that account's email/password plus the setup code.
+--
+-- Option B - from the SQL Editor:
 -- 1. Create the user through the Supabase Auth Dashboard or the application.
 -- 2. Run this query in the SQL Editor to promote that Auth user:
--- SELECT public.make_admin('your-registered-email@example.com', 'admin');
+--    SELECT public.make_admin('your-registered-email@example.com', 'admin');
+--
+-- Either way the account can then sign in on the admin screen with its email
+-- address or its admin username.

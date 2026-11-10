@@ -70,7 +70,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   headers.set("Authorization", `Bearer ${session.access_token}`)
   if (options.body) headers.set("Content-Type", "application/json")
 
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers })
+  let response: Response
+  try {
+    response = await fetch(`${API_URL}${path}`, { ...options, headers })
+  } catch {
+    // fetch() rejects with a bare "Failed to fetch" when the server cannot be
+    // reached (not running, wrong address, blocked by CORS or mixed content).
+    // Replace it with an explanation the member can act on.
+    throw new Error(
+      "We can't reach the scheduling service right now. Check your connection, then try again.",
+    )
+  }
   const body: unknown = await response.json().catch(() => null)
   if (!response.ok) {
     const detail =

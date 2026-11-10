@@ -9,6 +9,7 @@ import {
 } from "../../shared/ui"
 import { useAuth } from "./AuthContext"
 import { type SocialProvider, type UserProfile } from "./types"
+import { isSupabaseConfigured } from "../../lib/supabase"
 
 type AuthTab = "signin" | "signup"
 type PhoneStep = "email" | "phone" | "code"
@@ -97,11 +98,16 @@ export function AuthScreen({
   onSuccess,
   onBack,
   onAdmin,
+  onSkip,
   defaultTab = "signin",
 }: {
-  onSuccess: (profile?: UserProfile) => void
+  onSuccess: (
+    profile?: UserProfile,
+    mode?: "signin" | "signup",
+  ) => void
   onBack: () => void
   onAdmin?: () => void
+  onSkip?: () => void
   defaultTab?: AuthTab
 }) {
   const {
@@ -164,7 +170,7 @@ export function AuthScreen({
           res.error || "Unable to sign in. Please verify your credentials.",
         )
       } else {
-        onSuccess(res.profile)
+        onSuccess(res.profile, "signin")
       }
     } else {
       const res = await signUpWithEmail(email, password, fullName)
@@ -175,7 +181,7 @@ export function AuthScreen({
         // Confirmation notice message
         setInfoMessage(res.error)
       } else {
-        onSuccess()
+        onSuccess(res.profile, "signup")
       }
     }
   }
@@ -243,6 +249,21 @@ export function AuthScreen({
       </div>
 
       <Card>
+        {!isSupabaseConfigured && (
+          <div className="mb-5 rounded-xl border border-[#C9921A]/30 bg-[#FEF3DC] p-4">
+            <p className="text-sm font-bold text-[#C9921A]">
+              Member accounts are not connected in this build
+            </p>
+            <p className="mt-1 text-sm leading-relaxed text-[#1A202C]">
+              Add <span className="font-mono">VITE_SUPABASE_URL</span> and{" "}
+              <span className="font-mono">VITE_SUPABASE_ANON_KEY</span> to{" "}
+              <span className="font-mono">.env.local</span> (see{" "}
+              <span className="font-mono">.env.example</span>) to enable sign in
+              and sign up.
+            </p>
+          </div>
+        )}
+
         <div className="mb-6 flex rounded-xl bg-[#F0F4FA] p-1">
           <button
             type="button"
@@ -498,6 +519,15 @@ export function AuthScreen({
         )}
 
         <div className="mt-6 flex flex-col items-center gap-3 border-t border-[#D1D9E8] pt-5">
+          {!isSupabaseConfigured && onSkip && (
+            <button
+              type="button"
+              onClick={onSkip}
+              className="text-sm font-bold text-[#1B3A6B] hover:underline cursor-pointer"
+            >
+              Continue as a guest →
+            </button>
+          )}
           {onAdmin && (
             <button
               type="button"
