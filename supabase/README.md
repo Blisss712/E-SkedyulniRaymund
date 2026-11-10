@@ -7,10 +7,11 @@ This application connects directly to Supabase without needing a Python or FastA
 1. Create a free project at [supabase.com](https://supabase.com).
 2. Open your Supabase project dashboard -> **SQL Editor** -> **New query**.
 3. Copy and paste the contents of `supabase/schema.sql` (or `supabase/admin_setup.sql` if updating existing schema) and click **Run**.
-   - This creates all tables (`organizations`, `events`, `member_profiles`, `admin_profiles`, `organization_join_requests`, `organization_leaders`, `notifications`).
+   - This creates all tables (`organizations`, `events`, `member_profiles`, `admin_profiles`, `organization_join_requests`, `organization_leaders`, `notifications`, `chat_conversations`, `chat_participants`, `chat_messages`).
    - It sets up automatic user registration triggers, username resolution (`get_admin_email`), and Row Level Security (RLS).
    - An existing project that already has `member_profiles` without the `onboarded` column also needs `supabase/member_onboarding.sql` (see "Signing in and signing up").
    - An existing project that wants ministry coordinators also needs `supabase/organization_leaders.sql` (see section 2.4).
+   - An existing project that wants messaging also needs `supabase/messaging.sql` (see section 2.5).
 4. Get your API credentials from Supabase Dashboard -> **Project Settings** -> **API**:
    - Project URL (`https://xyz.supabase.co`)
    - `anon` `public` key
@@ -318,6 +319,95 @@ automatically.
 To verify the installation, run [`supabase/verify_organizations.sql`](verify_organizations.sql);
 section 7 lists the current appointments. The appointment screen is also a safe way to check:
 if the table is missing it reports that the appointments could not be loaded.
+
+## 2.5 Messaging (direct chats and ministry group chats)
+
+The member dashboard's **Messages** tab — and the same **Messages** section in the
+Administrator and Coordinator workspaces — lets every account:
+
+- search the other member accounts by full name or email address and start a private chat;
+- read and post in the group chat that every organization gets automatically.
+
+### Install
+
+`chat_conversations`, `chat_participants`, and `chat_messages` are part of `schema.sql`,
+so a fresh project needs no extra step. For an existing project, run
+[`supabase/messaging.sql`](messaging.sql) once in the Supabase SQL Editor. It is
+idempotent and also:
+
+- creates one group chat for every organization that already exists, and adds the
+  organization's current approved members and assigned administrators;
+- creates the triggers that keep that membership in sync from then on;
+- adds the chat tables to the `supabase_realtime` publication;
+- installs the account-search and conversation RPCs used by the app.
+
+If the app shows **"Messaging is not set up in Supabase yet"**, that script has not been
+run on the project the app is pointed at.
+
+### The automatic organization group chat
+
+| Event | What happens in the chat |
+| --- | --- |
+| An organization is created | A group chat titled with the organization name is created. |
+| The organization is renamed | The group chat is renamed too. |
+| A join request is approved | The new approved member is added to the group chat. |
+| An administrator is assigned to the organization | They are added to the group chat as well. |
+| A member leaves/is removed from the organization | They are removed from the group chat. |
+| The organization is deleted | Its group chat and messages are deleted with it. |
+
+The triggers run in the database, so this also works for organizations created by the
+admin workspace, by the optional FastAPI backend, or directly in SQL.
+
+### Privacy and security
+
+- A private chat is visible only to its two participants. Administrators have no
+  read access to other people's private conversations.
+- RLS rejects a message written as somebody else, and rejects reads or posts in a
+  conversation the account does not belong to.
+- Account search never returns a whole email address: results show a masked address
+  and, when there is one, a ministry both accounts belong to.
+- The read marker is written only through `mark_conversation_read()`; the app has no
+  direct UPDATE privilege on membership rows.
+
+### Repair existing organizations
+
+The installer already runs the backfill, but it can be repeated at any time (for
+example after importing organizations through SQL):
+
+```sql
+SELECT public.backfill_organization_chats();
+```
+
+It is idempotent: organizations that already have a chat keep it and only missing
+participants are added.
+
+### Verify
+
+Run the verification queries at the bottom of [`supabase/messaging.sql`](messaging.sql),
+or use this read-only summary:
+
+```sql
+SELECT
+    organization.name,
+    conversation.id AS chat_id,
+    COUNT(participant.user_id) AS chat_members
+FROM public.organizations AS organization
+LEFT JOIN public.chat_conversations AS conversation
+  ON conversation.organization_id = organization.id
+LEFT JOIN public.chat_participants AS participant
+  ON participant.conversation_id = conversation.id
+GROUP BY organization.name, conversation.id
+ORDER BY organization.name;
+```
+
+Every organization should have a non-null `chat_id`.
+
+### Realtime
+
+`messaging.sql` adds `chat_messages` and `chat_participants` to the
+`supabase_realtime` publication when they are not already there. The app still
+refreshes the inbox when the tab becomes visible and every 60 seconds, so a project
+with Realtime disabled remains usable.
 
 ## 3. Creating an Admin Account
 

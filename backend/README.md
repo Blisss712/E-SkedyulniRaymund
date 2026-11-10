@@ -31,6 +31,11 @@ This folder contains the FastAPI service for the admin module.
    python scripts/create_admin.py
    ```
 
+   To enable in-app messaging (private chats and the automatic organization group
+   chats), run [`../supabase/messaging.sql`](../supabase/messaging.sql) once after
+   either schema. It is idempotent and creates the chat tables, policies, and
+   membership triggers.
+
    The script creates the Supabase Auth user and corresponding `admin_profiles`
    record. It requires `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `ADMIN_FULL_NAME` in
    `.env`.

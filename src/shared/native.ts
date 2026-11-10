@@ -26,7 +26,7 @@ export function applyStatusBar(screen: string) {
 
   if (!isNativeApp) return
 
-  const style = screen === "home" ? SystemBarsStyle.Dark : SystemBarsStyle.Light
+  const style = screen === "home" || screen === "chat" ? SystemBarsStyle.Dark : SystemBarsStyle.Light
 
   SystemBars.setStyle({ style, bar: SystemBarType.StatusBar }).catch(() => {})
 }

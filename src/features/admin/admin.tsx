@@ -3,6 +3,9 @@ import { Button, InputField } from "../../shared/ui"
 import { useAdmin } from "./useAdmin"
 import { CoordinatorsSection } from "./coordinators"
 import { EventsTimeline } from "./eventsTimeline"
+import { MessagesPanel } from "../messaging/messaging"
+import { useMessaging } from "../messaging/MessagingContext"
+import type { ChatConversation } from "../messaging/types"
 import {
   combineDateTime,
   describeSchedule,
@@ -24,22 +27,25 @@ import type {
 } from "./types"
 import type { TimetablePosition } from "../availability/types"
 
-export type AdminSection = "dashboard" | "organizations" | "events" | "requests" | "coordinators"
-const ADMIN_SECTIONS: { value: AdminSection; label: string }[] = [
-  { value: "dashboard", label: "Dashboard" },
-  { value: "organizations", label: "Organizations" },
-  { value: "events", label: "Events" },
-  { value: "requests", label: "Join requests" },
-  { value: "coordinators", label: "Coordinators" },
+export type AdminSection = "dashboard" | "organizations" | "events" | "requests" | "coordinators" | "messages"
+type AdminSectionItem = { value: AdminSection; label: string; short: string }
+const ADMIN_SECTIONS: AdminSectionItem[] = [
+  { value: "dashboard", label: "Dashboard", short: "Home" },
+  { value: "organizations", label: "Organizations", short: "Orgs" },
+  { value: "events", label: "Events", short: "Events" },
+  { value: "requests", label: "Join requests", short: "Requests" },
+  { value: "coordinators", label: "Coordinators", short: "Leaders" },
+  { value: "messages", label: "Messages", short: "Chat" },
 ]
 /**
  * A coordinator sees only their own ministries: no organization management, no
  * join-request review, and no Coordinator appointments of their own.
  */
-const COORDINATOR_SECTIONS: { value: AdminSection; label: string }[] = [
-  { value: "dashboard", label: "Dashboard" },
-  { value: "organizations", label: "My ministries" },
-  { value: "events", label: "Events" },
+const COORDINATOR_SECTIONS: AdminSectionItem[] = [
+  { value: "dashboard", label: "Dashboard", short: "Home" },
+  { value: "organizations", label: "My ministries", short: "Ministries" },
+  { value: "events", label: "Events", short: "Events" },
+  { value: "messages", label: "Messages", short: "Chat" },
 ]
 
 /** Who is using the workspace: a full administrator or a ministry coordinator. */
@@ -469,6 +475,14 @@ function OrganizationDetails({ organization, admin, onBack, onEdit, onCreateEven
               <p className="mt-1 text-sm text-muted">Share this code with members so they can request to join this organization.</p>
             </div>
           )}
+          <div className="mt-5 rounded-xl border border-border bg-[#F4F6FB] p-4">
+            <p className="text-xs font-bold uppercase tracking-wide text-muted">Ministry group chat</p>
+            <p className="mt-1 text-sm leading-relaxed text-muted">
+              A group chat named “{organization.name}” is created automatically. Every approved
+              member, and every administrator assigned to this organization, joins it
+              automatically; members who leave are removed.
+            </p>
+          </div>
           <div className="mt-6 grid gap-5 border-t border-border pt-6 sm:grid-cols-2">
             {[
               ["Contact email", organization.contactEmail || "Not provided"],
@@ -581,7 +595,7 @@ function OrganizationForm({ initial, onCancel, onSave }: {
       <Button variant="ghost" size="compact" fullWidth={false} onClick={onCancel}>Back to Organizations</Button>
       <AdminHeader
         title={initial ? "Edit organization" : "Create organization"}
-        description="Keep the profile focused on the information needed to manage schedules and communication."
+        description="Keep the profile focused on the information needed to manage schedules and communication. Every new organization automatically gets a group chat for its members."
       />
       <div className="rounded-2xl border border-border border-t-4 border-t-gold bg-white p-5 shadow-sm sm:p-6">
         <div className="grid gap-5 sm:grid-cols-2">
@@ -954,6 +968,9 @@ export function AdminScreen({
   onRejectRequest,
   role = "admin",
   leaderOrganizationIds = [],
+  onOpenConversation,
+  initialSection = "dashboard",
+  onSectionChange,
 }: {
   onLogout: () => void
   /** What leaving the workspace means: a sign out, or a coordinator's way back. */
@@ -966,11 +983,24 @@ export function AdminScreen({
   role?: AdminWorkspaceRole
   /** The ministries a coordinator is allowed to see and schedule. */
   leaderOrganizationIds?: string[]
+  /** Opens a conversation on the shared chat screen, returning here afterwards. */
+  onOpenConversation: (conversation: ChatConversation) => void
+  /** The section to show on mount, restored after returning from a chat. */
+  initialSection?: AdminSection
+  /** Lets the parent remember the open section across screens. */
+  onSectionChange?: (section: AdminSection) => void
 }) {
   const scoped = role === "leader"
   const admin = useAdmin(scoped ? { organizationIds: leaderOrganizationIds } : {})
+  const messaging = useMessaging()
   const sections = scoped ? COORDINATOR_SECTIONS : ADMIN_SECTIONS
-  const [view, setView] = useState<AdminView>({ name: "section", section: "dashboard" })
+  // The phone layout keeps the original five (or three) bottom tabs and reaches
+  // Messages from the chat button in the header instead.
+  const mobileSections = sections.filter(section => section.value !== "messages")
+  const [view, setView] = useState<AdminView>({
+    name: "section",
+    section: initialSection,
+  })
   // The Events section's list/timeline choice and its place on the timeline are
   // held here, so opening an event form and saving returns to the same view
   // instead of falling back to the list of the current week.
@@ -994,6 +1024,7 @@ export function AdminScreen({
 
   function openSection(section: AdminSection) {
     setView({ name: "section", section })
+    onSectionChange?.(section)
   }
 
   let content: React.ReactNode
@@ -1044,6 +1075,16 @@ export function AdminScreen({
     )
   } else if (!scoped && view.name === "section" && view.section === "coordinators") {
     content = <CoordinatorsSection organizations={admin.organizations} />
+  } else if (view.name === "section" && view.section === "messages") {
+    content = (
+      <MessagesPanel
+        conversations={messaging.conversations}
+        loading={messaging.loading}
+        error={messaging.error}
+        onOpen={onOpenConversation}
+        variant="admin"
+      />
+    )
   } else if (view.name === "section" && view.section === "dashboard") {
     content = (
       <Dashboard
@@ -1085,7 +1126,65 @@ export function AdminScreen({
       <div className="sticky top-0 z-40 border-b border-white/10 bg-navy text-white shadow-sm lg:hidden">
         <div className="flex items-center justify-between px-4 py-4">
           <AdminBrand compact role={role} />
-          <Button variant="ghost" size="compact" fullWidth={false} onClick={onLogout} className="text-white hover:bg-white/10">{logoutLabel}</Button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => openSection("messages")}
+              aria-label={
+                messaging.unreadTotal > 0
+                  ? `Messages, ${messaging.unreadTotal} unread`
+                  : "Messages"
+              }
+              className={`relative flex h-11 w-11 items-center justify-center rounded-xl border transition-colors ${
+                activeSection === "messages"
+                  ? "border-white bg-white text-navy"
+                  : "border-white/25 text-white hover:bg-white/10"
+              }`}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                className="h-6 w-6"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M7.5 18.5 4 21l.9-4.1A8 8 0 0 1 4 12c0-4.4 3.6-8 8-8s8 3.6 8 8-3.6 8-8 8c-1.6 0-3.1-.5-4.5-1.5Z"
+                />
+              </svg>
+              {messaging.unreadTotal > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#C0392B] px-1 text-[10px] font-extrabold text-white ring-2 ring-navy">
+                  {messaging.unreadTotal > 99 ? "99+" : messaging.unreadTotal}
+                </span>
+              )}
+            </button>
+            <Button variant="ghost" size="compact" fullWidth={false} onClick={onLogout} className="hidden text-white hover:bg-white/10 sm:flex">{logoutLabel}</Button>
+            <button
+              type="button"
+              onClick={onLogout}
+              aria-label={logoutLabel}
+              title={logoutLabel}
+              className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/25 text-white transition-colors hover:bg-white/10 sm:hidden"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                className="h-5 w-5"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M15 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2v-2M10 12h10m0 0-3-3m3 3-3 3"
+                />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
       <div className="mx-auto flex min-h-screen max-w-screen-2xl">
@@ -1101,7 +1200,12 @@ export function AdminScreen({
                 onClick={() => openSection(value)}
                 className={`justify-start ${activeSection === value ? "bg-white text-navy" : "text-white hover:bg-white/10"}`}
               >
-                {label}
+                <span className="flex-1 text-left">{label}</span>
+                {value === "messages" && messaging.unreadTotal > 0 && (
+                  <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[#C0392B] px-1.5 text-[10px] font-extrabold text-white">
+                    {messaging.unreadTotal > 99 ? "99+" : messaging.unreadTotal}
+                  </span>
+                )}
               </Button>
             ))}
           </div>
@@ -1126,15 +1230,16 @@ export function AdminScreen({
       </div>
       <nav
         className="fixed bottom-3 left-3 right-3 z-40 grid gap-1 rounded-3xl border border-white/70 bg-white/90 p-2 shadow-xl backdrop-blur-xl backdrop-saturate-150 lg:hidden"
-        style={{ gridTemplateColumns: `repeat(${sections.length}, minmax(0, 1fr))` }}
+        style={{ gridTemplateColumns: `repeat(${mobileSections.length}, minmax(0, 1fr))` }}
       >
-        {sections.map(({ value, label }) => (
+        {mobileSections.map(({ value, label, short }) => (
           <Button
             key={value}
             variant="ghost"
             size="compact"
             fullWidth
             onClick={() => openSection(value)}
+            ariaLabel={label}
             ariaPressed={activeSection === value}
             className={`min-h-12 rounded-2xl px-1 text-xs sm:px-2 sm:text-sm ${
               activeSection === value
@@ -1142,7 +1247,7 @@ export function AdminScreen({
                 : "text-muted hover:bg-bg hover:text-navy"
             }`}
           >
-            {label}
+            {short}
           </Button>
         ))}
       </nav>

@@ -3,6 +3,9 @@ import { BACK_TARGETS, type Screen } from "./navigation"
 import { useIsDesktop } from "./shared/ui"
 import { applyStatusBar, listenForBackButton } from "./shared/native"
 import { HomeScreen, type HomeTab, type Ministry } from "./shared/home"
+import { MessagesPanel, ChatScreen } from "./features/messaging/messaging"
+import { useMessaging } from "./features/messaging/MessagingContext"
+import type { ChatConversation } from "./features/messaging/types"
 
 // Wizard
 import { WelcomeScreen, TellNameScreen, JoinGroupScreen, PendingScreen } from "./features/wizard/wizard"
@@ -19,6 +22,7 @@ import { useAvailability } from "./features/availability/useAvailability"
 import { SlotList, SlotVolunteerScreen, SlotServingScreen, SlotFilledScreen } from "./features/slots/slots"
 import { useSlots } from "./features/slots/useSlots"
 import { AdminScreen } from "./features/admin/admin"
+import type { AdminSection } from "./features/admin/admin"
 import { usePublishedEvents } from "./features/admin/usePublishedEvents"
 import { AdminLoginScreen } from "./features/admin/login"
 import { CoordinatorLoginScreen } from "./features/admin/coordinatorLogin"
@@ -57,6 +61,9 @@ export default function App() {
   const [resetEmail, setResetEmail] = useState("")
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [dashboardReturnScreen, setDashboardReturnScreen] = useState<"home" | "admin">("home")
+  // The admin workspace is unmounted while a chat is open, so this remembers the
+  // section it should reopen on return.
+  const [adminSection, setAdminSection] = useState<AdminSection>("dashboard")
 
   /** The signed-in account's workspace role; coordinator access is appointment-based. */
   const workspaceRole = profile?.role === "leader" ? "leader" : "admin"
@@ -78,8 +85,23 @@ export default function App() {
   const joinRequests = useJoinRequests()
   // Published events belong on the member's timetable next to their availability.
   const publishedEvents = usePublishedEvents()
+  // The inbox lives above the screens so unread counts agree everywhere.
+  const messaging = useMessaging()
+  const [activeConversation, setActiveConversation] =
+    useState<ChatConversation | null>(null)
+  const [chatReturnScreen, setChatReturnScreen] = useState<"home" | "admin">(
+    "home",
+  )
   /** One id per ministry the member just asked to join, in the order sent. */
   const [activeRequestIds, setActiveRequestIds] = useState<string[]>([])
+
+  /** Refreshes the inbox whenever the member dashboard is shown again. */
+  const refreshMessagesRef = useRef(messaging.refresh)
+  refreshMessagesRef.current = messaging.refresh
+  useEffect(() => {
+    if (screen !== "home") return
+    void refreshMessagesRef.current()
+  }, [screen])
 
   // Memberships and requests change while the member is away (an administrator
   // may approve a request), so re-read them whenever the dashboard opens.
@@ -128,10 +150,26 @@ export default function App() {
   function reset() {
     wizard.reset()
     setActiveRequestIds([])
+    setActiveConversation(null)
     setHomeTab("availability")
     setMinistryId("")
+    setAdminSection("dashboard")
     availability.resetPosition()
     go("welcome")
+  }
+
+  /** Opens a conversation and remembers which workspace should come back. */
+  function openChat(conversation: ChatConversation, from: "home" | "admin") {
+    setActiveConversation(conversation)
+    setChatReturnScreen(from)
+    go("chat")
+  }
+
+  /** Returns from a conversation and refreshes its preview and unread badge. */
+  function closeChat() {
+    setActiveConversation(null)
+    void messaging.refresh()
+    go(chatReturnScreen)
   }
 
   /**
@@ -215,12 +253,18 @@ export default function App() {
   dashboardReturnScreenRef.current = dashboardReturnScreen
   const isCoordinatorRef = useRef(isCoordinator)
   isCoordinatorRef.current = isCoordinator
+  const closeChatRef = useRef(closeChat)
+  closeChatRef.current = closeChat
   const goRef = useRef(go)
   goRef.current = go
   const signOutRef = useRef(signOut)
   signOutRef.current = signOut
   useEffect(() => listenForBackButton(BACK_TARGETS, () => screenRef.current, () => prevScreenRef.current, to => {
     const current = screenRef.current
+    if (current === "chat") {
+      closeChatRef.current()
+      return
+    }
     if (current === "set-recurring" || current === "add-override" || current.startsWith("slot-")) {
       goRef.current(dashboardReturnScreenRef.current)
       return
@@ -325,6 +369,7 @@ export default function App() {
         isLeader={profile?.role === "leader"}
         onLeader={openWorkspace}
         embedded={embedded}
+        unreadMessages={messaging.unreadTotal}
       >
         {homeTab === "availability" ? (
           <AvailabilityTab
@@ -347,13 +392,22 @@ export default function App() {
             onRemoveRecurring={availability.removeRecurring}
             onRemoveOverride={availability.removeOverride}
           />
-        ) : (
+        ) : homeTab === "slots" ? (
           <SlotList
             slots={slots.slots}
             onSlotTap={slot => {
               setDashboardReturnScreen(embedded ? "admin" : "home")
               go(slots.openSlot(slot))
             }}
+          />
+        ) : (
+          <MessagesPanel
+            conversations={messaging.conversations}
+            loading={messaging.loading}
+            error={messaging.error}
+            onOpen={conversation =>
+              openChat(conversation, embedded ? "admin" : "home")
+            }
           />
         )}
       </HomeScreen>
@@ -469,9 +523,13 @@ export default function App() {
           onRejectRequest={joinRequests.rejectRequest}
           role={workspaceRole}
           leaderOrganizationIds={profile?.leaderOrganizations.map(ministry => ministry.id) ?? []}
+          onOpenConversation={conversation => openChat(conversation, "admin")}
+          initialSection={adminSection}
+          onSectionChange={setAdminSection}
           logoutLabel={isCoordinator ? "My member dashboard" : "Sign out"}
           onLogout={() => {
             setAdminAuthenticated(false)
+            setAdminSection("dashboard")
             // A coordinator is a member first: leaving the workspace returns to
             // their schedule instead of ending the session.
             if (isCoordinator) {
@@ -621,5 +679,11 @@ export default function App() {
 
     case "slot-filled":
       return <SlotFilledScreen onSeeOthers={() => go(dashboardReturnScreen)} />
+
+    // ─── Messages ─────────────────────────────────────────────────────────────
+    case "chat":
+      return activeConversation ? (
+        <ChatScreen conversation={activeConversation} onBack={closeChat} />
+      ) : null
   }
 }

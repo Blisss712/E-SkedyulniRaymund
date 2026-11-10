@@ -3,7 +3,7 @@ import { useState } from "react"
 import { Button, useSheetClose } from "./ui"
 import { NotificationCenter } from "./notifications"
 
-export type HomeTab = "availability" | "slots"
+export type HomeTab = "availability" | "slots" | "messages"
 
 export type Ministry = {
   id: string
@@ -150,6 +150,8 @@ export function HomeScreen({
   onLeader,
 
   onAssistant,
+
+  unreadMessages = 0,
 }: {
   userName: string
 
@@ -182,6 +184,9 @@ export function HomeScreen({
   onLeader?: () => void
 
   onAssistant?: () => void
+
+  /** Unread messages across the member's conversations, shown on the tab. */
+  unreadMessages?: number
 }) {
   const [showMinistries, setShowMinistries] = useState(false)
 
@@ -291,7 +296,7 @@ export function HomeScreen({
           embedded
             ? "w-full"
             : "fixed bottom-3 inset-x-0 z-30 w-[calc(100%-1.5rem)]"
-        } mx-auto grid max-w-3xl grid-cols-2 gap-1 rounded-3xl border border-white/70 bg-white/60 p-2 backdrop-blur-xl backdrop-saturate-150 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_10px_30px_rgba(27,58,107,0.18)]`}
+        } mx-auto grid max-w-3xl grid-cols-3 gap-1 rounded-3xl border border-white/70 bg-white/60 p-2 backdrop-blur-xl backdrop-saturate-150 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_10px_30px_rgba(27,58,107,0.18)]`}
         style={
           embedded
             ? undefined
@@ -302,17 +307,24 @@ export function HomeScreen({
           ["availability", "Availability"],
 
           ["slots", "Open Slots"],
+
+          ["messages", "Messages"],
         ] as Array<[HomeTab, string]>).map(([value, label]) => (
           <button
             key={value}
             onClick={() => onTabChange(value)}
-            className={`min-h-[52px] rounded-2xl px-2 text-[15px] font-bold transition-all duration-200 ${
+            className={`relative flex min-h-[52px] items-center justify-center rounded-2xl px-1.5 text-[13px] font-bold transition-all duration-200 sm:px-2 sm:text-[15px] ${
               tab === value
                 ? "bg-[#1B3A6B]/10 text-[#1B3A6B] ring-1 ring-[#1B3A6B]/15 shadow-sm"
                 : "text-[#64748B] hover:bg-white/50"
             }`}
           >
             {label}
+            {value === "messages" && unreadMessages > 0 && (
+              <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#C0392B] px-1 text-[10px] font-extrabold text-white">
+                {unreadMessages > 99 ? "99+" : unreadMessages}
+              </span>
+            )}
           </button>
         ))}
       </nav>
