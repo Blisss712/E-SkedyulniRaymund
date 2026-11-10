@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js"
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim() || ""
+/** The configured project URL, exported so auth screens can name the OAuth callback. */
+export const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim() || ""
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() || ""
 
 export const isSupabaseConfigured = Boolean(

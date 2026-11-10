@@ -9,6 +9,7 @@ This application connects directly to Supabase without needing a Python or FastA
 3. Copy and paste the contents of `supabase/schema.sql` (or `supabase/admin_setup.sql` if updating existing schema) and click **Run**.
    - This creates all tables (`organizations`, `events`, `member_profiles`, `admin_profiles`, `organization_join_requests`, `notifications`).
    - It sets up automatic user registration triggers, username resolution (`get_admin_email`), and Row Level Security (RLS).
+   - An existing project that already has `member_profiles` without the `onboarded` column also needs `supabase/member_onboarding.sql` (see "Signing in and signing up").
 4. Get your API credentials from Supabase Dashboard -> **Project Settings** -> **API**:
    - Project URL (`https://xyz.supabase.co`)
    - `anon` `public` key
@@ -34,6 +35,49 @@ The app will automatically detect the configuration and connect directly to your
 With the two variables set, the welcome screen offers **Create account** and **Sign in**.
 Members can register with email and password, Google, Facebook, or a phone OTP. Returning
 members are taken straight to their dashboard, and the session survives a page reload.
+
+Every **new** account goes through the same setup wizard — confirm your name, then enter a
+group code — whichever button created it. Social sign-ups used to skip those prompts
+because Google/Facebook already supply a name and an email, and the app guessed from the
+name (later from a 15-minute "first sign-in" window) that setup was done. The wizard is now
+driven by a recorded flag instead, never by the name or by the sign-in timestamps:
+
+1. `member_profiles.onboarded`, the durable record, on projects that ran
+   [`supabase/member_onboarding.sql`](member_onboarding.sql).
+2. `user_metadata.onboarded`, written when the member confirms their name, so the flag
+   still sticks on a project that has not run that script yet.
+
+An account with neither record counts as new: it is asked once, the wizard records the
+flag, and the prompt does not come back. Members who registered before this change — email
+or social — are therefore asked once more, which is cheaper than leaving a social account
+that never saw the wizard marked as finished for good. Running the script is recommended
+but optional; it is idempotent, and its backfill (which would mark every existing row as
+finished) is deliberately left commented out.
+
+### Social sign-in (Google / Facebook)
+
+Google and Facebook sign-in leave the app and come back through Supabase, so two settings
+must agree:
+
+1. **Supabase** → Authentication → URL Configuration → **Redirect URLs** must contain the
+   app URL you actually use, e.g. `http://localhost:8443` (plus your deployed URL).
+2. **Google** (Authorized redirect URIs) and **Facebook** (Valid OAuth Redirect URIs) must
+   contain the Supabase callback:
+   `https://<project-ref>.supabase.co/auth/v1/callback`.
+
+The client ID/secret from Google Cloud Console or the Meta developer dashboard is saved
+under **Authentication → Providers** in Supabase.
+
+When a provider refuses the request, Supabase sends the browser back with
+`?error=access_denied&error_description=...`. The app now opens the sign-in screen with that
+reason instead of silently showing the welcome screen again:
+
+| Message in the app | Cause |
+| --- | --- |
+| "The provider cancelled the sign-in (`access_denied`)" | The account chooser was dismissed or the consent screen was declined. Sign in again and accept the permissions. |
+| Facebook `Permissions error` | The Meta app is still in **Development mode**, or the requested `email` permission is not granted to that account. Add the account as a Tester/Administrator (Meta app dashboard → App roles) or switch the app to **Live**. |
+| "The provider rejected the callback URL" | The redirect URLs above do not match exactly — check `http` vs `https`, the port, and trailing slashes. |
+| "That sign-in link was stale" (`bad_oauth_state`) | The tab was left open too long. Start the sign-in again from the app. |
 
 ### Existing projects: member profile repair
 

@@ -95,7 +95,8 @@ function MinistrySheet({
           )) : (
             <p className="py-6 text-[16px] leading-relaxed text-[#64748B]">
               You haven't joined a ministry yet. Use the button below to send a
-              request with your group code.
+              request with your group code, or pick your ministry and ask an
+              administrator to add you.
             </p>
           )}
         </div>
