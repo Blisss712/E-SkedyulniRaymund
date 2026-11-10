@@ -22,13 +22,15 @@ import { useJoinRequests } from "./features/admin/useJoinRequests"
 import { logoutAdmin } from "./features/admin/api"
 import { AuthScreen } from "./features/auth/AuthScreen"
 import { useAuth } from "./features/auth/AuthContext"
+import { isPlaceholderName } from "./features/auth/types"
 import { isSupabaseConfigured } from "./lib/supabase"
 
 export default function App() {
-  const { user, signOut } = useAuth()
+  const { user, profile, loading, signOut } = useAuth()
   const isDesktop = useIsDesktop()
   const [screen, setScreen] = useState<Screen>("welcome")
   const [prevScreen, setPrevScreen] = useState<Screen>("welcome")
+  const [authTab, setAuthTab] = useState<"signin" | "signup">("signin")
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [dashboardReturnScreen, setDashboardReturnScreen] = useState<"home" | "admin">("home")
 
@@ -65,6 +67,21 @@ export default function App() {
     go("welcome")
   }
 
+  /** Opens the account screen on the requested tab (sign in or create account). */
+  function startAuth(tab: "signin" | "signup") {
+    setAuthTab(tab)
+    go("auth")
+  }
+
+  /** Copies the signed-in account name into the onboarding form when it is still empty. */
+  function prefillName(fullName?: string) {
+    if (!fullName || isPlaceholderName(fullName)) return
+    if (wizard.firstName || wizard.lastName) return
+    const parts = fullName.trim().split(/\s+/)
+    wizard.setFirstName(parts[0] ?? "")
+    wizard.setLastName(parts.slice(1).join(" "))
+  }
+
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "smooth" })
     applyStatusBar(screen)
@@ -88,10 +105,26 @@ export default function App() {
     goRef.current(to)
   }), [])
 
+  // Resume an existing session (the Supabase session now survives a page reload).
+  // This runs at most once, and only while the welcome screen is still showing.
+  const resumedSessionRef = useRef(false)
+  useEffect(() => {
+    if (resumedSessionRef.current || loading || !user || !profile) return
+    resumedSessionRef.current = true
+    if (screenRef.current !== "welcome") return
+    prefillName(profile.fullName)
+    if (profile.role === "admin") {
+      setAdminAuthenticated(true)
+      setScreen("admin")
+    } else {
+      setScreen("home")
+    }
+  }, [loading, user, profile])
+
   function renderMemberDashboard(embedded = false) {
     return (
       <HomeScreen
-        userName={wizard.form.name || "Maria Santos"}
+        userName={wizard.form.name || profile?.fullName || "Maria Santos"}
         ministry={ministry}
         onMinistryChange={setMinistry}
         tab={homeTab}
@@ -142,7 +175,12 @@ export default function App() {
     case "welcome":
       return (
         <WelcomeScreen
-          onStart={() => go(isSupabaseConfigured && !user ? "auth" : "tell-name")}
+          accountsEnabled={isSupabaseConfigured}
+          onStart={() => {
+            if (isSupabaseConfigured && !user) startAuth("signup")
+            else go("tell-name")
+          }}
+          onSignIn={() => startAuth("signin")}
           onAdmin={() => go("admin-login")}
         />
       )
@@ -150,15 +188,28 @@ export default function App() {
     case "auth":
       return (
         <AuthScreen
+          defaultTab={authTab}
           onBack={() => go("welcome")}
           onAdmin={() => go("admin-login")}
-          onSuccess={profile => {
-            if (profile?.role === "admin") {
+          onSkip={() => go("tell-name")}
+          onSuccess={(signedInProfile, mode) => {
+            if (signedInProfile?.role === "admin") {
               setAdminAuthenticated(true)
               go("admin")
-            } else {
-              go("tell-name")
+              return
             }
+            if (mode === "signup") {
+              prefillName(signedInProfile?.fullName)
+              go("tell-name")
+              return
+            }
+            // Returning members go straight back to their dashboard.
+            if (signedInProfile && !isPlaceholderName(signedInProfile.fullName)) {
+              go("home")
+              return
+            }
+            prefillName(signedInProfile?.fullName)
+            go("tell-name")
           }}
         />
       )
@@ -177,6 +228,7 @@ export default function App() {
     case "admin":
       return adminAuthenticated ? (
         <AdminScreen
+          adminName={profile?.fullName}
           requests={joinRequests.requests}
           requestError={joinRequests.apiError}
           onApproveRequest={joinRequests.approveRequest}
@@ -184,6 +236,9 @@ export default function App() {
           onLogout={() => {
             setAdminAuthenticated(false)
             void logoutAdmin()
+            // An administrator who signed in through Supabase also holds a
+            // Supabase session; end it so a reload does not reopen the workspace.
+            void signOut()
             go("welcome")
           }}
         />
@@ -216,7 +271,7 @@ export default function App() {
       const back = () => go(prevScreen)
       const submitJoinRequest = async (group: { groupCode: string; groupName: string }) => {
         const requestId = await joinRequests.createRequest({
-            memberName: wizard.form.name || "Member",
+            memberName: wizard.form.name || profile?.fullName || "Member",
             groupCode: group.groupCode,
             groupName: group.groupName,
         })
