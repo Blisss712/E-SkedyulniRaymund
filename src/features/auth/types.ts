@@ -8,6 +8,12 @@ export type UserProfile = {
   fullName: string
   role: UserRole
   active: boolean
+  /**
+   * False until the member has been through the account setup wizard (name +
+   * join code). Social sign-ups arrive with their provider name already filled
+   * in, so the name alone cannot tell a new account from a returning one.
+   */
+  onboarded: boolean
 }
 
 export type SocialProvider = "google" | "facebook" | "apple"
@@ -47,14 +53,12 @@ export type AuthContextType = {
     ok: boolean
     error?: string
     profile?: UserProfile
-    notAdmin?: boolean
-    email?: string
   }>
   signUpWithEmail: (
     email: string,
     password: string,
     fullName: string,
-  ) => Promise<{ ok: boolean; error?: string }>
+  ) => Promise<{ ok: boolean; error?: string; profile?: UserProfile }>
   signInWithProvider: (
     provider: SocialProvider,
   ) => Promise<{ ok: boolean; error?: string }>
@@ -65,5 +69,7 @@ export type AuthContextType = {
     phone: string,
     token: string,
   ) => Promise<{ ok: boolean; error?: string; profile?: UserProfile }>
+  /** Saves the confirmed name and marks the account setup wizard as finished. */
+  completeOnboarding: (fullName: string) => Promise<void>
   signOut: () => Promise<void>
 }

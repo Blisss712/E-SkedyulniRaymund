@@ -5,35 +5,20 @@ import { NotificationCenter } from "./notifications"
 
 export type HomeTab = "availability" | "slots"
 
-type Ministry = {
+export type Ministry = {
   id: string
 
   name: string
 
+  /** The organization this ministry belongs to, or a status such as "Waiting for approval". */
   parish: string
 
   waiting?: boolean
 }
 
-export const MINISTRIES: Ministry[] = [
-  { id: "lectors", name: "Lectors", parish: "St. Joseph Parish" },
-
-  { id: "altar", name: "Altar Servers", parish: "St. Joseph Parish" },
-
-  { id: "choir", name: "Parish Choir", parish: "St. Joseph Parish" },
-
-  {
-    id: "youth",
-
-    name: "Youth Ministry",
-
-    parish: "St. Joseph Parish",
-
-    waiting: true,
-  },
-]
-
 function MinistrySheet({
+  ministries,
+
   selected,
 
   onSelect,
@@ -42,7 +27,9 @@ function MinistrySheet({
 
   onJoin,
 }: {
-  selected: Ministry
+  ministries: Ministry[]
+
+  selected: Ministry | null
 
   onSelect: (ministry: Ministry) => void
 
@@ -79,7 +66,7 @@ function MinistrySheet({
           </Button>
         </div>
         <div className="divide-y divide-[#D1D9E8]">
-          {MINISTRIES.map((ministry) => (
+          {ministries.length ? ministries.map((ministry) => (
             <button
               key={ministry.id}
               disabled={ministry.waiting}
@@ -96,7 +83,7 @@ function MinistrySheet({
                   {ministry.waiting ? "Waiting for approval" : ministry.parish}
                 </p>
               </div>
-              {selected.id === ministry.id && (
+              {selected?.id === ministry.id && (
                 <span
                   className="text-2xl font-bold text-[#2D7A4F]"
                   aria-label="Selected"
@@ -105,7 +92,13 @@ function MinistrySheet({
                 </span>
               )}
             </button>
-          ))}
+          )) : (
+            <p className="py-6 text-[16px] leading-relaxed text-[#64748B]">
+              You haven't joined a ministry yet. Use the button below to send a
+              request with your group code, or pick your ministry and ask an
+              administrator to add you.
+            </p>
+          )}
         </div>
         <div className="mt-4 border-t border-[#D1D9E8] pt-4">
           <Button variant="secondary" onClick={onJoin}>
@@ -129,6 +122,8 @@ function greeting() {
 
 export function HomeScreen({
   userName,
+
+  ministries,
 
   ministry,
 
@@ -154,7 +149,10 @@ export function HomeScreen({
 }: {
   userName: string
 
-  ministry: Ministry
+  /** The ministries the signed-in member belongs to, loaded from the organization tables. */
+  ministries: Ministry[]
+
+  ministry: Ministry | null
 
   onMinistryChange: (ministry: Ministry) => void
 
@@ -252,7 +250,9 @@ export function HomeScreen({
               <p className="text-[14px] font-semibold text-[#64748B]">
                 Current ministry
               </p>
-              <p className="text-xl font-extrabold">{ministry.name} ▾</p>
+              <p className="text-xl font-extrabold">
+                {ministry ? `${ministry.name} ▾` : "Join a ministry ▾"}
+              </p>
             </div>
           </button>
         </div>
@@ -339,6 +339,7 @@ export function HomeScreen({
 
       {showMinistries && (
         <MinistrySheet
+          ministries={ministries}
           selected={ministry}
           onClose={() => setShowMinistries(false)}
           onSelect={switchMinistry}

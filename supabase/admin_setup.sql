@@ -6,7 +6,7 @@
 -- 1. Extensions & admin_profiles table
 -- 2. is_admin(uid) security helper
 -- 3. get_admin_email(p_identifier) username-to-email resolver for sign-in
--- 4. make_admin(email, username) promotion helper
+-- 4. make_admin(email, username) promotion helper (SQL editor / service role only)
 -- 5. Row-Level Security (RLS) policies for admin_profiles
 -- ==============================================================================
 
@@ -136,7 +136,20 @@ BEGIN
 END;
 $$;
 
+-- make_admin() writes administrator rows directly and therefore bypasses RLS.
+-- It must never be callable with the public anon key, so only the SQL editor
+-- (postgres), the service role, and the FastAPI backend keep access.
+DO $$
+BEGIN
+    IF to_regprocedure('public.make_admin(text,text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.make_admin(TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+        GRANT EXECUTE ON FUNCTION public.make_admin(TEXT, TEXT) TO service_role;
+    END IF;
+END;
+$$;
+
 -- 5. Row-Level Security Policies for admin_profiles
+
 ALTER TABLE public.admin_profiles ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Read own admin profile or any if admin" ON public.admin_profiles;
@@ -151,11 +164,23 @@ USING (user_id = auth.uid() OR public.is_admin(auth.uid()))
 WITH CHECK (user_id = auth.uid() OR public.is_admin(auth.uid()));
 
 -- ==============================================================================
--- QUICK RUN COMMANDS (CHOOSE ONE TO EXECUTE):
+-- QUICK RUN COMMANDS
 -- ==============================================================================
 --
--- EXAMPLE: Create the user through the Supabase Auth Dashboard or the app,
--- then promote the existing Auth user:
+-- Administrators are promoted only from the Supabase SQL editor (or the service
+-- role). The app has no promotion UI, so the public anon key cannot grant admin.
+--
+-- STEP 1 - Promote an existing Auth user (the account must already be registered
+-- through the app or Supabase Dashboard -> Authentication -> Users):
 -- SELECT public.make_admin('your-registered-email@example.com', 'admin');
 --
+-- STEP 2 - Verify the administrator profile:
+-- SELECT u.email, a.username, a.role, a.active
+-- FROM auth.users u
+-- LEFT JOIN public.admin_profiles a ON a.user_id = u.id
+-- WHERE lower(u.email) = lower('your-registered-email@example.com');
+--
+-- Then sign in at the app's admin screen with that email or admin username.
+-- A fully self-contained copy-paste query (no dependency on make_admin) lives in
+-- supabase/promote_to_admin.sql.
 -- ==============================================================================

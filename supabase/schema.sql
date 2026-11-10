@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS public.member_profiles (
     email VARCHAR(255) NULL,
     full_name VARCHAR(150) NOT NULL DEFAULT '',
     active BOOLEAN NOT NULL DEFAULT TRUE,
+    -- FALSE until the member finishes the in-app setup wizard (name + join code).
+    -- Social sign-ups already carry the provider's name, so the name alone cannot
+    -- tell a new account from a returning one. See supabase/member_onboarding.sql
+    -- for projects that installed this schema before the column existed.
+    onboarded BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -217,7 +222,12 @@ BEGIN
           NULLIF(TRIM(NEW.raw_user_meta_data->>'full_name'), ''),
           NULLIF(TRIM(NEW.raw_user_meta_data->>'name'), ''),
           NULLIF(TRIM(COALESCE(NEW.raw_user_meta_data->>'first_name', '') || ' ' || COALESCE(NEW.raw_user_meta_data->>'last_name', '')), ''),
-          TRIM(split_part(NEW.email, '@', 1))
+          -- Phone (SMS OTP) sign-ups have no email address. Fall back to the phone
+          -- number so full_name never receives NULL (NOT NULL column) and the
+          -- auth.users insert does not fail with "Database error saving new user".
+          NULLIF(TRIM(split_part(COALESCE(NEW.email, ''), '@', 1)), ''),
+          NULLIF(TRIM(COALESCE(NEW.phone, '')), ''),
+          'Member'
         ),
         TRUE
     )
@@ -301,6 +311,12 @@ AS $$
 DECLARE
     v_req RECORD;
 BEGIN
+    -- Approval is an administrator action. The function is SECURITY DEFINER, so
+    -- without this check any caller who knew a request id could approve it.
+    IF NOT public.is_admin(auth.uid()) THEN
+        RAISE EXCEPTION 'Only administrators can approve join requests';
+    END IF;
+
     SELECT * INTO v_req FROM public.organization_join_requests WHERE id = req_id;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Join request not found';
@@ -320,6 +336,12 @@ BEGIN
     END IF;
 END;
 $$;
+
+-- Functions are executable by PUBLIC by default, which would include the anon
+-- role. Only signed-in administrators (and the service role) may call this.
+REVOKE ALL ON FUNCTION public.approve_join_request(VARCHAR, UUID, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.approve_join_request(VARCHAR, UUID, TEXT)
+    TO authenticated, service_role;
 
 -- Convenience function to promote an existing auth user to admin
 CREATE OR REPLACE FUNCTION public.make_admin(target_email TEXT, target_username TEXT DEFAULT NULL)
@@ -374,6 +396,26 @@ BEGIN
 END;
 $$;
 
+-- make_admin() writes administrator rows directly and therefore bypasses RLS.
+-- It must never be callable with the public anon key, so only the SQL editor
+-- (postgres), the service role, and the FastAPI backend keep access.
+DO $$
+BEGIN
+    IF to_regprocedure('public.make_admin(text,text)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.make_admin(TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+        GRANT EXECUTE ON FUNCTION public.make_admin(TEXT, TEXT) TO service_role;
+    END IF;
+END;
+$$;
+
+-- ------------------------------------------------------------------------------
+-- 6A. ADMINISTRATOR PROVISIONING
+-- ------------------------------------------------------------------------------
+-- Administrators are promoted only from the SQL editor / service role with the
+-- make_admin() helper above. There is deliberately no browser-callable promotion
+-- function: knowing the public anon key must never grant administrative access.
+-- See supabase/promote_to_admin.sql for the copy-paste query.
+
 -- ------------------------------------------------------------------------------
 -- 7. ROW LEVEL SECURITY (RLS) POLICIES
 -- ------------------------------------------------------------------------------
@@ -414,6 +456,14 @@ DROP POLICY IF EXISTS "Update own member profile" ON public.member_profiles;
 CREATE POLICY "Update own member profile" ON public.member_profiles
 FOR UPDATE TO authenticated
 USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+-- Availability, slot sign-ups, and join requests reference member_profiles(user_id).
+-- The handle_new_user() trigger normally creates the row, but a member must also be
+-- able to repair it from the client if the trigger was never installed.
+DROP POLICY IF EXISTS "Create own member profile" ON public.member_profiles;
+CREATE POLICY "Create own member profile" ON public.member_profiles
+FOR INSERT TO authenticated
 WITH CHECK (user_id = auth.uid());
 
 -- Organizations
@@ -699,9 +749,14 @@ VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- ------------------------------------------------------------------------------
--- 9. ADMIN ACCOUNT PROVISIONING (RUN SEPARATELY ONCE AS NEEDED)
+-- 9. ADMIN ACCOUNT PROVISIONING (SQL EDITOR ONLY)
 -- ------------------------------------------------------------------------------
--- After running this schema:
 -- 1. Create the user through the Supabase Auth Dashboard or the application.
 -- 2. Run this query in the SQL Editor to promote that Auth user:
--- SELECT public.make_admin('your-registered-email@example.com', 'admin');
+--    SELECT public.make_admin('your-registered-email@example.com', 'admin');
+--
+-- A self-contained copy-paste version (no dependency on make_admin) lives in
+-- supabase/promote_to_admin.sql.
+--
+-- The account can then sign in on the admin screen with its email address or its
+-- admin username. No promotion control is exposed to the browser.

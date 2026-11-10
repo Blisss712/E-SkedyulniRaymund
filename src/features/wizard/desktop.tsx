@@ -3,7 +3,9 @@ import type { FormData } from "./types"
 import { Button, InputField, Card, BackButton, ClockIcon } from "../../shared/ui"
 import { EXAMPLE_GROUPS, PENDING_STEPS } from "./data"
 import type { JoinRequestStatus } from "../admin/types"
-import { isMemberApiConfigured, memberApi } from "../../lib/memberApi"
+import { resolveGroup, groupCodeFromLink, usesSampleGroups } from "./joinGroups"
+import { useMinistryOptions, type MinistryOption } from "./ministryOptions"
+import { MinistryRequestPicker } from "./requestAccess"
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
@@ -76,31 +78,51 @@ function DesktopFormPanel({ children }: { children: React.ReactNode }) {
 export function DesktopJoinGroupScreen({ data, setData, onJoin, onBack }: {
   data: FormData
   setData: (d: Partial<FormData>) => void
-  onJoin: (group: { groupCode: string; groupName: string }) => Promise<void>
+  onJoin: (group: { groupCode: string; groupName: string; organizationId?: string }) => Promise<void>
   onBack: () => void
 }) {
   const [error, setError] = useState("")
-  const [pasteMode, setPasteMode] = useState(false)
-  const [pasteLink, setPasteLink] = useState("")
+  /** False: enter a join code. True: ask an administrator to add the member. */
+  const [requestMode, setRequestMode] = useState(false)
+  const [selected, setSelected] = useState<MinistryOption | null>(null)
+  const [busy, setBusy] = useState(false)
+  const { options, loading, loadError } = useMinistryOptions(requestMode)
+
+  async function submit(join: { groupCode: string; groupName: string; organizationId?: string }) {
+    setBusy(true)
+    try {
+      setData({ groupCode: join.groupCode, groupName: join.groupName })
+      setError("")
+      await onJoin(join)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to submit the group request.")
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function handleJoin() {
-    const code = pasteMode ? (pasteLink.split("/").pop() || "").toUpperCase().trim() : data.groupCode.trim().toUpperCase()
+    // A pasted join link still works: only its last segment is the code.
+    const code = groupCodeFromLink(data.groupCode)
     if (!code) { setError("Please enter a group code to continue."); return }
     try {
-      const group = isMemberApiConfigured
-        ? await memberApi.lookupGroup(code)
-        : { name: EXAMPLE_GROUPS[code] }
+      const group = await resolveGroup(code)
       if (!group.name) {
         setError("We couldn't find a group with that code. Please check with your group leader and try again.")
         return
       }
-      setData({ groupCode: code, groupName: group.name })
-      setError("")
-      await onJoin({ groupCode: code, groupName: group.name })
+      await submit({ groupCode: code, groupName: group.name, organizationId: group.id })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to submit the group request.")
     }
   }
+
+  async function handleRequest() {
+    if (!selected) { setError("Choose the ministry you want to join."); return }
+    await submit({ groupCode: "", groupName: selected.name, organizationId: selected.id })
+  }
+
+  const requestUnavailable = requestMode && (loading || options.length === 0)
 
   return (
     <div className="flex min-h-screen">
@@ -109,39 +131,51 @@ export function DesktopJoinGroupScreen({ data, setData, onJoin, onBack }: {
         <BackButton onClick={onBack} />
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-[#1B3A6B] mb-1">Join a Ministry Group</h2>
-          <p className="text-[#64748B] text-[17px]">Enter the group code given to you by your group leader or coordinator.</p>
+          <p className="text-[#64748B] text-[17px]">
+            {requestMode
+              ? "No group code? Pick your ministry and ask an administrator to add you."
+              : "Enter the group code given to you by your group leader or coordinator."}
+          </p>
         </div>
         <Card>
           <div className="flex flex-col gap-6">
-            {!pasteMode ? (
+            {!requestMode ? (
               <>
-                <InputField label="Group Code" id="d-group-code" value={data.groupCode} onChange={v => setData({ groupCode: v })} helper="Your group leader gave you this code. Example: LECT-2024" error={error} placeholder="Example: LECT-2024" autoComplete="off" />
+                <InputField label="Group Code" id="d-group-code" value={data.groupCode} onChange={v => setData({ groupCode: v })} helper={usesSampleGroups ? "Your group leader gave you this code. Example: LECT-2024" : "Use the join code your group leader shared with you."} error={error} placeholder={usesSampleGroups ? "Example: LECT-2024" : "Enter your group code"} autoComplete="off" />
                 <div className="flex items-center gap-3">
                   <div className="flex-1 h-px bg-[#D1D9E8]" /><span className="text-[#94A3B8] text-[14px] font-medium">or</span><div className="flex-1 h-px bg-[#D1D9E8]" />
                 </div>
-                <button onClick={() => { setPasteMode(true); setError("") }} className="min-h-[52px] w-full rounded-xl border-2 border-dashed border-[#9BA8C0] text-[#1B3A6B] font-semibold text-[16px] flex items-center justify-center gap-2 hover:border-[#1B3A6B] hover:bg-[#F4F6FB] transition-colors cursor-pointer">
-                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                    <rect x="3" y="2" width="11" height="14" rx="1.5" stroke="currentColor" strokeWidth="1.75" />
-                    <path d="M7 6h7M7 9h7M7 12h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                    <path d="M6 5V3.5A1.5 1.5 0 0 1 7.5 2h9A1.5 1.5 0 0 1 18 3.5v11a1.5 1.5 0 0 1-1.5 1.5H15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                <button onClick={() => { setRequestMode(true); setError("") }} className="min-h-[52px] w-full rounded-xl border-2 border-dashed border-[#9BA8C0] text-[#1B3A6B] font-semibold text-[16px] flex items-center justify-center gap-2 hover:border-[#1B3A6B] hover:bg-[#F4F6FB] transition-colors cursor-pointer">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M22 2 11 13" />
+                    <path d="M22 2 15 22l-4-9-9-4 20-7z" />
                   </svg>
-                  Paste a Group Link Instead
+                  Request Access from an Administrator
                 </button>
               </>
             ) : (
               <>
-                <button onClick={() => { setPasteMode(false); setError("") }} className="text-[#64748B] text-[15px] hover:text-[#1B3A6B] transition-colors text-left cursor-pointer flex items-center gap-1 -mb-2">← Back to entering a code</button>
-                <InputField label="Paste Your Group Link" id="d-paste-link" value={pasteLink} onChange={setPasteLink} helper="Paste the link you received. It ends with your group code." error={error} placeholder="https://eskedyul.ph/join/LECT-2024" autoComplete="off" />
+                <button onClick={() => { setRequestMode(false); setError("") }} className="text-[#64748B] text-[15px] hover:text-[#1B3A6B] transition-colors text-left cursor-pointer flex items-center gap-1 -mb-2">← Back to entering a code</button>
+                <MinistryRequestPicker
+                  options={options}
+                  loading={loading}
+                  loadError={loadError}
+                  selected={selected}
+                  onSelect={option => { setSelected(option); setError("") }}
+                  error={error}
+                />
               </>
             )}
-            <Button onClick={handleJoin} variant="primary">Join This Group</Button>
+            <Button onClick={requestMode ? handleRequest : handleJoin} variant="primary" disabled={busy || requestUnavailable}>
+              {busy ? "Sending…" : requestMode ? "Send Request to Administrator" : "Join This Group"}
+            </Button>
           </div>
         </Card>
-        {!isMemberApiConfigured && <div className="mt-5 bg-[#EFF6FF] border border-[#2563EB]/20 rounded-xl p-4">
+        {usesSampleGroups && <div className="mt-5 bg-[#EFF6FF] border border-[#2563EB]/20 rounded-xl p-4">
           <p className="text-[#2563EB] font-semibold text-[15px] mb-2">Try these sample codes:</p>
           <div className="flex flex-wrap gap-2">
             {Object.keys(EXAMPLE_GROUPS).map(code => (
-              <button key={code} onClick={() => { setData({ groupCode: code }); setPasteMode(false); setError("") }} className="font-mono bg-white text-[#1B3A6B] border border-[#D1D9E8] rounded-lg px-3 py-1.5 text-[14px] font-semibold hover:border-[#1B3A6B] transition-colors cursor-pointer">{code}</button>
+              <button key={code} onClick={() => { setData({ groupCode: code }); setRequestMode(false); setError("") }} className="font-mono bg-white text-[#1B3A6B] border border-[#D1D9E8] rounded-lg px-3 py-1.5 text-[14px] font-semibold hover:border-[#1B3A6B] transition-colors cursor-pointer">{code}</button>
             ))}
           </div>
         </div>

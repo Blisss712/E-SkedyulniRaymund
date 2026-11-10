@@ -1,44 +1,80 @@
 import { useState } from "react"
 import { BackButton, Button, Card, InputField, Logo, ScreenShell } from "../../shared/ui"
 import { isAdminApiConfigured, loginAdmin } from "./api"
+import { useAuth } from "../auth/AuthContext"
+import { isSupabaseConfigured } from "../../lib/supabase"
 
 const DEMO_USERNAME = "admin"
 const DEMO_PASSWORD = "admin123"
+
+/**
+ * How this build can verify an administrator:
+ * - "api": the optional FastAPI service issues its own access token.
+ * - "supabase": Supabase Auth checks the password, and `admin_profiles` grants
+ *   administrator access (email or admin username).
+ * - "demo": neither is configured, so only the offline demo account works.
+ */
+type SignInMode = "api" | "supabase" | "demo"
+
+function resolveMode(): SignInMode {
+  if (isAdminApiConfigured) return "api"
+  if (isSupabaseConfigured) return "supabase"
+  return "demo"
+}
 
 export function AdminLoginScreen({ onBack, onAuthenticated }: {
   onBack: () => void
   onAuthenticated: (token?: string) => void
 }) {
-  const [username, setUsername] = useState("")
+  const { signInAsAdmin } = useAuth()
+  const mode = resolveMode()
+
+  const [identifier, setIdentifier] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
-  async function signIn() {
-    if (!username.trim() || !password) {
-      setError("Enter your username and password.")
-      return
-    }
-    setLoading(true)
-    if (isAdminApiConfigured) {
-      try {
-        const result = await loginAdmin(username.trim(), password)
-        setError("")
-        onAuthenticated(result.access_token)
-      } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "The username or password is incorrect.")
-      } finally {
-        setLoading(false)
-      }
-      return
-    }
-    if (username.trim() !== DEMO_USERNAME || password !== DEMO_PASSWORD) {
-      setError("The username or password is incorrect.")
-      return
-    }
+
+  async function signIn(event?: React.FormEvent) {
+    event?.preventDefault()
     setError("")
-    onAuthenticated()
-    setLoading(false)
+
+    const id = identifier.trim()
+    if (!id || !password) {
+      setError("Enter your email or username and password.")
+      return
+    }
+
+    setLoading(true)
+    try {
+      if (mode === "api") {
+        try {
+          const result = await loginAdmin(id, password)
+          onAuthenticated(result.access_token)
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : "The username or password is incorrect.")
+        }
+        return
+      }
+
+      if (mode === "supabase") {
+        const result = await signInAsAdmin(id, password)
+        if (!result.ok) {
+          setError(result.error || "The email/username or password is incorrect.")
+          return
+        }
+        onAuthenticated()
+        return
+      }
+
+      if (id !== DEMO_USERNAME || password !== DEMO_PASSWORD) {
+        setError("The username or password is incorrect.")
+        return
+      }
+      onAuthenticated()
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -52,20 +88,26 @@ export function AdminLoginScreen({ onBack, onAuthenticated }: {
           <p className="text-xs font-bold uppercase tracking-widest text-gold">Administration</p>
           <p className="mt-2 text-2xl font-bold text-navy">Admin sign in</p>
           <p className="mt-2 text-base leading-relaxed text-muted">
-            Sign in with your administrator account to manage organizations and events.
+            Sign in with an administrator account to manage organizations and events.
           </p>
         </div>
-        <div className="mt-6 flex flex-col gap-5">
+
+        <form onSubmit={signIn} className="mt-6 flex flex-col gap-5">
           <InputField
             id="admin-username"
-            label="Username"
-            value={username}
+            label="Admin email or username"
+            value={identifier}
             onChange={value => {
-              setUsername(value)
+              setIdentifier(value)
               setError("")
             }}
-            placeholder="Enter username"
+            placeholder={mode === "demo" ? "admin" : "admin@example.com or admin"}
             autoComplete="username"
+            helper={
+              mode === "supabase"
+                ? "Use the email of an administrator account, or the admin username stored with it."
+                : undefined
+            }
           />
           <InputField
             id="admin-password"
@@ -79,13 +121,25 @@ export function AdminLoginScreen({ onBack, onAuthenticated }: {
             placeholder="Enter password"
             autoComplete="current-password"
           />
+
           {error && (
             <p role="alert" className="rounded-xl bg-red-light p-4 text-sm font-semibold text-red">
               {error}
             </p>
           )}
-          <Button onClick={() => void signIn()} disabled={loading}>{loading ? "Signing in..." : "Sign in to admin"}</Button>
-        </div>
+
+          <Button type="submit" disabled={loading}>
+            {loading ? "Signing in..." : "Sign in to admin"}
+          </Button>
+        </form>
+
+        {mode === "demo" && (
+          <p className="mt-4 rounded-xl bg-gold-light p-3 text-sm leading-relaxed text-gold">
+            No account provider is connected in this build, so only the offline demo account works:
+            <span className="font-bold"> admin / admin123</span>. Add the Supabase environment
+            variables to sign in with real accounts.
+          </p>
+        )}
       </Card>
       <p className="mt-5 text-center text-sm leading-relaxed text-muted">
         This workspace is restricted to authorized administrators.

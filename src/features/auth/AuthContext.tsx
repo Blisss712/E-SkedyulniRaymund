@@ -1,4 +1,4 @@
-import {
+﻿import {
   createContext,
   useContext,
   useEffect,
@@ -15,6 +15,19 @@ import {
 } from "./types"
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+
+/** The `member_profiles` columns this app reads. */
+type MemberProfileRow = {
+  user_id: string
+  email: string | null
+  full_name: string | null
+  active: boolean
+  /** Added by supabase/member_onboarding.sql; absent in older projects. */
+  onboarded?: boolean | null
+}
+
+const MEMBER_PROFILE_COLUMNS = "user_id, email, full_name, active"
+const MEMBER_PROFILE_COLUMNS_WITH_ONBOARDED = `${MEMBER_PROFILE_COLUMNS}, onboarded`
 
 function getProviderDisplayName(user: User): string | undefined {
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>
@@ -33,6 +46,40 @@ function getProviderDisplayName(user: User): string | undefined {
   return undefined
 }
 
+/**
+ * Whether the account setup wizard (name + group code) has been finished.
+ *
+ * A social sign-up arrives with the provider's name already filled in, so the
+ * name cannot tell a brand-new account from a returning one â€” only a recorded
+ * flag can. There are two places to look for it, strongest first:
+ *
+ *  1. `member_profiles.onboarded` (supabase/member_onboarding.sql), the durable
+ *     record, when the project has that column.
+ *  2. `user_metadata.onboarded`, written by completeOnboarding(), which works on
+ *     projects that have not run the migration yet.
+ *
+ * When neither records anything the account is treated as new and goes through
+ * setup once, which then records the flag. Guessing from `last_sign_in_at`
+ * instead used to mislabel every account that had signed in before the flag
+ * existed â€” those members skipped setup for good, even though they had never
+ * been asked.
+ */
+function resolveOnboarded(
+  rowOnboarded: boolean | null | undefined,
+  hasOnboardedColumn: boolean,
+  metadataOnboarded: boolean,
+): boolean {
+  if (metadataOnboarded) return true
+  if (hasOnboardedColumn) return rowOnboarded === true
+  return false
+}
+
+/** The onboarding flag kept in the auth record, for projects without the DB column. */
+function metadataSaysOnboarded(user: User): boolean {
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>
+  return meta.onboarded === true
+}
+
 function normalizePhone(phone: string): string {
   const cleaned = phone.replace(/[\s-]/g, "")
   if (!cleaned) return ""
@@ -46,12 +93,70 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [loading, setLoading] = useState(true)
 
-  async function fetchProfile(
+  /**
+   * Guarantees the signed-in user has a `member_profiles` row.
+   *
+   * Availability, slot sign-ups and join requests all reference
+   * `member_profiles(user_id)`, so a missing row makes those writes fail with a
+   * foreign-key error. The database trigger normally creates the row; this is a
+   * best-effort repair for projects where the trigger is not installed yet, so
+   * failures are ignored rather than blocking sign-in.
+   */
+  async function ensureMemberProfile(
     userId: string,
     userEmail: string,
-    metaName?: string,
+    fullName: string,
+    onboarded: boolean,
   ) {
-    if (!isSupabaseConfigured) return
+    const values = {
+      user_id: userId,
+      email: userEmail || null,
+      full_name: fullName,
+      active: true,
+    }
+
+    const { error } = await supabase.from("member_profiles").upsert(
+      { ...values, onboarded },
+      { onConflict: "user_id", ignoreDuplicates: true },
+    )
+    if (!error) return
+
+    // Older projects have no `onboarded` column yet: retry without it so the
+    // repair still creates the row the other member tables point at.
+    const retry = await supabase.from("member_profiles").upsert(values, {
+      onConflict: "user_id",
+      ignoreDuplicates: true,
+    })
+    if (retry.error) {
+      console.warn("Unable to ensure the member profile row:", retry.error.message)
+    }
+  }
+
+  async function fetchProfile(
+    user: User,
+    fallbackEmail = "",
+    nameOverride?: string,
+  ): Promise<UserProfile | undefined> {
+    if (!isSupabaseConfigured) return undefined
+
+    const userId = user.id
+    const userEmail = user.email || fallbackEmail
+    const metaName = nameOverride || getProviderDisplayName(user)
+    // Recorded only. Nothing recorded means this account has not been through
+    // setup on this build, so it still needs the wizard.
+    const metadataOnboarded = metadataSaysOnboarded(user)
+
+    const fallbackName =
+      metaName || userEmail.split("@")[0] || "Member"
+
+    const fallbackProfile: UserProfile = {
+      id: userId,
+      email: userEmail,
+      fullName: fallbackName,
+      role: "member",
+      active: true,
+      onboarded: metadataOnboarded,
+    }
 
     try {
       // 1. Check if user is an admin
@@ -69,46 +174,75 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             adminData.full_name || adminData.username || "Administrator",
           role: "admin",
           active: true,
+          onboarded: true,
         }
         setProfile(adminProfile)
         return adminProfile
       }
 
       // 2. Check if user is a member
-      const { data: memberData } = await supabase
+      let row: MemberProfileRow | null = null
+      let hasOnboardedColumn = true
+
+      const { data, error } = await supabase
         .from("member_profiles")
-        .select("user_id, email, full_name, active")
+        .select(MEMBER_PROFILE_COLUMNS_WITH_ONBOARDED)
         .eq("user_id", userId)
         .maybeSingle()
 
-      if (memberData) {
+      if (error) {
+        // The project has not run supabase/member_onboarding.sql: read the row
+        // without the new column. The auth metadata flag is the only record of
+        // a finished setup then.
+        hasOnboardedColumn = false
+        const retry = await supabase
+          .from("member_profiles")
+          .select(MEMBER_PROFILE_COLUMNS)
+          .eq("user_id", userId)
+          .maybeSingle()
+        if (retry.error) {
+          console.warn("Unable to read the member profile:", retry.error.message)
+        }
+        row = (retry.data as MemberProfileRow | null) ?? null
+      } else {
+        row = (data as MemberProfileRow | null) ?? null
+      }
+
+      if (row) {
         const memberProfile: UserProfile = {
-          id: memberData.user_id,
-          email: memberData.email || userEmail,
+          id: row.user_id,
+          email: row.email || userEmail,
           fullName:
-            memberData.full_name ||
+            row.full_name ||
             metaName ||
             userEmail.split("@")[0] ||
             "Member",
           role: "member",
-          active: memberData.active,
+          active: row.active,
+          onboarded: resolveOnboarded(
+            row.onboarded,
+            hasOnboardedColumn,
+            metadataOnboarded,
+          ),
         }
         setProfile(memberProfile)
         return memberProfile
       }
 
-      // 3. Fallback from user metadata
-      const fallbackProfile: UserProfile = {
-        id: userId,
-        email: userEmail,
-        fullName: metaName || userEmail.split("@")[0] || "Member",
-        role: "member",
-        active: true,
-      }
+      // 3. Repair the missing profile row, then fall back to user metadata
+      await ensureMemberProfile(
+        userId,
+        userEmail,
+        fallbackName,
+        metadataOnboarded,
+      )
       setProfile(fallbackProfile)
       return fallbackProfile
     } catch (err) {
       console.error("Error fetching user profile:", err)
+      // Sign-in must succeed even if the profile tables are unreachable.
+      setProfile(fallbackProfile)
+      return fallbackProfile
     }
   }
 
@@ -123,12 +257,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(initialSession)
       setUser(initialSession?.user ?? null)
       if (initialSession?.user) {
-        const metaName = getProviderDisplayName(initialSession.user)
-        fetchProfile(
-          initialSession.user.id,
-          initialSession.user.email || "",
-          metaName,
-        )
+        void fetchProfile(initialSession.user)
       }
       setLoading(false)
     })
@@ -140,12 +269,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(newSession)
       setUser(newSession?.user ?? null)
       if (newSession?.user) {
-        const metaName = getProviderDisplayName(newSession.user)
-        await fetchProfile(
-          newSession.user.id,
-          newSession.user.email || "",
-          metaName,
-        )
+        await fetchProfile(newSession.user)
       } else {
         setProfile(null)
       }
@@ -180,10 +304,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       let userProfile: UserProfile | null = null
       if (data.user) {
-        const metaName = getProviderDisplayName(data.user)
-        userProfile =
-          (await fetchProfile(data.user.id, data.user.email || "", metaName)) ||
-          null
+        userProfile = (await fetchProfile(data.user)) || null
       }
 
       return { ok: true, profile: userProfile ?? undefined }
@@ -200,8 +321,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ok: boolean
     error?: string
     profile?: UserProfile
-    notAdmin?: boolean
-    email?: string
   }> {
     const cleanId = identifier.trim()
     if (!cleanId || !password) {
@@ -218,27 +337,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    // 2. Resolve username to email if no '@' present
-    let emailToUse = cleanId
+    // Supabase Auth only accepts an email address. `get_admin_email()` maps the
+    // username stored in admin_profiles to that email before the password check.
+    let emailToUse = cleanId.toLowerCase()
     if (!cleanId.includes("@")) {
-      try {
-        const { data: resolvedEmail, error: rpcErr } = await supabase.rpc(
-          "get_admin_email",
-          {
-            p_identifier: cleanId,
-          },
-        )
-        if (!rpcErr && resolvedEmail) {
-          emailToUse = resolvedEmail
-        } else {
-          emailToUse = `${cleanId}@eskedyul.local`
+      const { data: resolvedEmail, error: resolveError } = await supabase.rpc(
+        "get_admin_email",
+        { p_identifier: cleanId },
+      )
+
+      if (resolveError) {
+        return {
+          ok: false,
+          error:
+            "Administrator sign in is not available yet. Run supabase/admin_setup.sql in the Supabase SQL editor, then try again.",
         }
-      } catch {
-        emailToUse = `${cleanId}@eskedyul.local`
       }
+
+      if (typeof resolvedEmail !== "string" || !resolvedEmail) {
+        return {
+          ok: false,
+          error: `No administrator account uses the username "${cleanId}". Try your email address instead.`,
+        }
+      }
+
+      emailToUse = resolvedEmail
     }
 
-    // 3. Attempt Supabase Auth
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
         email: emailToUse,
@@ -256,13 +381,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // 4. Verify admin role
-      const metaName = getProviderDisplayName(data.user)
-      const resolvedProfile = await fetchProfile(
-        data.user.id,
-        data.user.email || emailToUse,
-        metaName,
-      )
+      // The password was valid, but only admin_profiles grants the workspace.
+      const resolvedProfile = await fetchProfile(data.user, emailToUse)
 
       if (resolvedProfile?.role !== "admin") {
         await supabase.auth.signOut()
@@ -271,9 +391,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile(null)
         return {
           ok: false,
-          notAdmin: true,
-          email: data.user.email || emailToUse,
-          error: `Authenticated as ${data.user.email || emailToUse}, but this account does not have administrator privileges in admin_profiles.`,
+          error: `${data.user.email || emailToUse} signed in, but it is not an administrator yet. An existing administrator must promote it by running the SQL in supabase/promote_to_admin.sql in the Supabase SQL editor.`,
         }
       }
 
@@ -293,7 +411,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     email: string,
     password: string,
     fullName: string,
-  ): Promise<{ ok: boolean; error?: string }> {
+  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
     if (!isSupabaseConfigured) {
       return {
         ok: false,
@@ -325,11 +443,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      let createdProfile: UserProfile | undefined
       if (data.user) {
-        await fetchProfile(data.user.id, data.user.email || "", fullName.trim())
+        createdProfile =
+          (await fetchProfile(data.user, "", fullName.trim())) || undefined
       }
 
-      return { ok: true }
+      return { ok: true, profile: createdProfile }
     } catch (err: unknown) {
       return {
         ok: false,
@@ -438,9 +558,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      const metaName = getProviderDisplayName(data.user)
-      const userProfile =
-        (await fetchProfile(data.user.id, data.user.email || "", metaName)) || null
+      const userProfile = (await fetchProfile(data.user)) || null
 
       return { ok: true, profile: userProfile ?? undefined }
     } catch (err: unknown) {
@@ -448,6 +566,69 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ok: false,
         error: err instanceof Error ? err.message : "An unexpected error occurred.",
       }
+    }
+  }
+
+  /**
+   * Finishes the account setup wizard for the signed-in member: it stores the
+   * name that was confirmed and records that onboarding is done, so the next
+   * sign-in â€” including one that returns from Google or Facebook â€” opens the
+   * dashboard instead of asking for the same details again.
+   *
+   * Both writes are best effort. `onboarded` needs
+   * supabase/member_onboarding.sql; the auth metadata copy keeps the flag even
+   * on a project that has not run it yet.
+   */
+  async function completeOnboarding(fullName: string): Promise<void> {
+    // `full_name` is VARCHAR(150); a longer name would be rejected by the table.
+    const trimmed = fullName.trim().slice(0, 150)
+
+    setProfile(current =>
+      current
+        ? { ...current, fullName: trimmed || current.fullName, onboarded: true }
+        : current,
+    )
+
+    if (!isSupabaseConfigured || !user) return
+
+    try {
+      const values: Record<string, unknown> = {
+        user_id: user.id,
+        email: user.email || null,
+        active: true,
+        onboarded: true,
+      }
+      if (trimmed) values.full_name = trimmed
+
+      const { error } = await supabase
+        .from("member_profiles")
+        .upsert(values, { onConflict: "user_id" })
+
+      if (error) {
+        // Retry without the onboarding flag on projects missing the column.
+        delete values.onboarded
+        const retry = await supabase
+          .from("member_profiles")
+          .upsert(values, { onConflict: "user_id" })
+        if (retry.error) {
+          console.warn("Unable to save the member profile:", retry.error.message)
+        }
+      }
+
+      // The metadata copy is what keeps a project without the column from
+      // asking the same member for their name again, so write it even when the
+      // name could not be read back.
+      const metadata: Record<string, unknown> = { onboarded: true }
+      if (trimmed) metadata.full_name = trimmed
+
+      const { error: metadataError } = await supabase.auth.updateUser({
+        data: metadata,
+      })
+      if (metadataError) {
+        console.warn("Unable to update the account name:", metadataError.message)
+      }
+    } catch (err) {
+      console.warn("Unable to finish onboarding:", err)
     }
   }
 
@@ -479,6 +660,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInWithProvider,
         signInWithPhone,
         verifyPhoneOtp,
+        completeOnboarding,
         signOut,
       }}
     >

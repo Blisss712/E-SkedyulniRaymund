@@ -68,6 +68,8 @@ export type JoinRequestStatus = "pending" | "approved" | "rejected"
 
 export type JoinRequest = {
   id: string
+  /** The organization the request targets, when it came from the database. */
+  organizationId?: string
   memberName: string
   groupCode: string
   groupName: string
