@@ -772,8 +772,9 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved }: {
   )
 }
 
-export function AdminScreen({ onLogout, requests, requestError, onApproveRequest, onRejectRequest }: {
+export function AdminScreen({ onLogout, adminName, requests, requestError, onApproveRequest, onRejectRequest }: {
   onLogout: () => void
+  adminName?: string
   requests: JoinRequest[]
   requestError?: string
   onApproveRequest: (id: string) => void
@@ -888,7 +889,7 @@ export function AdminScreen({ onLogout, requests, requestError, onApproveRequest
             ))}
           </div>
           <div className="border-t border-white/15 pt-4">
-            <p className="px-3 text-sm font-semibold">Raymund Uygioco</p>
+            <p className="px-3 text-sm font-semibold">{adminName?.trim() || "Administrator"}</p>
             <p className="px-3 text-xs text-white/60">Administrator</p>
             <Button variant="ghost" size="compact" onClick={onLogout} className="mt-3 justify-start text-white hover:bg-white/10">Sign out</Button>
           </div>

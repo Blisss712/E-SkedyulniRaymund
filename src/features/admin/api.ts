@@ -14,7 +14,16 @@ async function request<T>(path: string, options: ApiOptions = {}): Promise<T> {
   headers.set("Content-Type", "application/json")
   const token = options.token ?? getAdminToken()
   if (token) headers.set("Authorization", `Bearer ${token}`)
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers })
+  let response: Response
+  try {
+    response = await fetch(`${API_URL}${path}`, { ...options, headers })
+  } catch {
+    // A network-level failure surfaces from fetch() as "Failed to fetch", which
+    // means nothing the administrator can understand. Say what happened instead.
+    throw new Error(
+      "We can't reach the admin service right now. Check that the backend server is running, then try again.",
+    )
+  }
   const body = await response.json().catch(() => null)
   if (!response.ok) {
     throw new Error(body?.detail || "The admin service could not complete the request.")

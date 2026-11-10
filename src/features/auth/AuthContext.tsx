@@ -9,6 +9,8 @@ import type { Session, User } from "@supabase/supabase-js"
 import { supabase, isSupabaseConfigured } from "../../lib/supabase"
 import {
   isPlaceholderName,
+  type AdminPromotionInput,
+  type AdminPromotionResult,
   type SocialProvider,
   type AuthContextType,
   type UserProfile,
@@ -46,12 +48,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [loading, setLoading] = useState(true)
 
+  /**
+   * Guarantees the signed-in user has a `member_profiles` row.
+   *
+   * Availability, slot sign-ups and join requests all reference
+   * `member_profiles(user_id)`, so a missing row makes those writes fail with a
+   * foreign-key error. The database trigger normally creates the row; this is a
+   * best-effort repair for projects where the trigger is not installed yet, so
+   * failures are ignored rather than blocking sign-in.
+   */
+  async function ensureMemberProfile(
+    userId: string,
+    userEmail: string,
+    fullName: string,
+  ) {
+    await supabase
+      .from("member_profiles")
+      .upsert(
+        {
+          user_id: userId,
+          email: userEmail || null,
+          full_name: fullName,
+          active: true,
+        },
+        { onConflict: "user_id", ignoreDuplicates: true },
+      )
+      .then(({ error }) => {
+        if (error) {
+          console.warn("Unable to ensure the member profile row:", error.message)
+        }
+      })
+  }
+
   async function fetchProfile(
     userId: string,
     userEmail: string,
     metaName?: string,
   ) {
     if (!isSupabaseConfigured) return
+
+    const fallbackName =
+      metaName || userEmail.split("@")[0] || "Member"
+
+    const fallbackProfile: UserProfile = {
+      id: userId,
+      email: userEmail,
+      fullName: fallbackName,
+      role: "member",
+      active: true,
+    }
 
     try {
       // 1. Check if user is an admin
@@ -97,18 +142,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return memberProfile
       }
 
-      // 3. Fallback from user metadata
-      const fallbackProfile: UserProfile = {
-        id: userId,
-        email: userEmail,
-        fullName: metaName || userEmail.split("@")[0] || "Member",
-        role: "member",
-        active: true,
-      }
+      // 3. Repair the missing profile row, then fall back to user metadata
+      await ensureMemberProfile(userId, userEmail, fallbackName)
       setProfile(fallbackProfile)
       return fallbackProfile
     } catch (err) {
       console.error("Error fetching user profile:", err)
+      // Sign-in must succeed even if the profile tables are unreachable.
+      setProfile(fallbackProfile)
+      return fallbackProfile
     }
   }
 
@@ -218,27 +260,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    // 2. Resolve username to email if no '@' present
-    let emailToUse = cleanId
+    // Supabase Auth only accepts an email address. `get_admin_email()` maps the
+    // username stored in admin_profiles to that email before the password check.
+    let emailToUse = cleanId.toLowerCase()
     if (!cleanId.includes("@")) {
-      try {
-        const { data: resolvedEmail, error: rpcErr } = await supabase.rpc(
-          "get_admin_email",
-          {
-            p_identifier: cleanId,
-          },
-        )
-        if (!rpcErr && resolvedEmail) {
-          emailToUse = resolvedEmail
-        } else {
-          emailToUse = `${cleanId}@eskedyul.local`
+      const { data: resolvedEmail, error: resolveError } = await supabase.rpc(
+        "get_admin_email",
+        { p_identifier: cleanId },
+      )
+
+      if (resolveError) {
+        return {
+          ok: false,
+          error:
+            "Administrator sign in is not available yet. Run supabase/admin_setup.sql in the Supabase SQL editor, then try again.",
         }
-      } catch {
-        emailToUse = `${cleanId}@eskedyul.local`
       }
+
+      if (typeof resolvedEmail !== "string" || !resolvedEmail) {
+        return {
+          ok: false,
+          error: `No administrator account uses the username "${cleanId}". Try your email address instead.`,
+        }
+      }
+
+      emailToUse = resolvedEmail
     }
 
-    // 3. Attempt Supabase Auth
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
         email: emailToUse,
@@ -256,7 +304,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // 4. Verify admin role
+      // The password was valid, but only admin_profiles grants the workspace.
       const metaName = getProviderDisplayName(data.user)
       const resolvedProfile = await fetchProfile(
         data.user.id,
@@ -273,7 +321,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           ok: false,
           notAdmin: true,
           email: data.user.email || emailToUse,
-          error: `Authenticated as ${data.user.email || emailToUse}, but this account does not have administrator privileges in admin_profiles.`,
+          error: `${data.user.email || emailToUse} signed in, but it is not an administrator yet. Use “Activate administrator access” below with the setup code to promote it.`,
         }
       }
 
@@ -289,11 +337,100 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  /**
+   * Promotes the signed-in account (or the account given by email/password) to an
+   * administrator. The database function requires the shared setup code from
+   * `public.admin_settings`, so the public anon key alone cannot grant admin.
+   */
+  async function promoteToAdmin(
+    input: AdminPromotionInput,
+  ): Promise<AdminPromotionResult> {
+    const code = input.code.trim()
+    if (!code) {
+      return { ok: false, error: "Enter the administrator setup code." }
+    }
+
+    if (!isSupabaseConfigured) {
+      return {
+        ok: false,
+        error: "Authentication is not configured. Add the Supabase environment variables.",
+      }
+    }
+
+    try {
+      let signedInUser = user
+
+      if (!signedInUser) {
+        const email = input.email?.trim() ?? ""
+        if (!email || !input.password) {
+          return {
+            ok: false,
+            error: "Enter the email and password of the member account to promote.",
+          }
+        }
+
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password: input.password,
+        })
+
+        if (error) {
+          return { ok: false, error: error.message }
+        }
+        if (!data.user) {
+          return { ok: false, error: "The member account could not be signed in." }
+        }
+        signedInUser = data.user
+      }
+
+      const { error } = await supabase.rpc("promote_current_user_to_admin", {
+        p_code: code,
+        p_username: input.username?.trim() || null,
+      })
+
+      if (error) {
+        const message = error.message || ""
+        return {
+          ok: false,
+          error: /could not find the function/i.test(message)
+            ? "Administrator activation is not installed yet. Run supabase/admin_setup.sql in the Supabase SQL editor, then try again."
+            : message ||
+              "Unable to activate administrator access. Run supabase/admin_setup.sql, then try again.",
+        }
+      }
+
+      const metaName = getProviderDisplayName(signedInUser)
+      const resolvedProfile = await fetchProfile(
+        signedInUser.id,
+        signedInUser.email || input.email || "",
+        metaName,
+      )
+
+      if (!resolvedProfile || resolvedProfile.role !== "admin") {
+        return {
+          ok: false,
+          error:
+            "The account was updated, but administrator access is still not active. Run supabase/admin_setup.sql in the Supabase SQL editor, then try again.",
+        }
+      }
+
+      return { ok: true, profile: resolvedProfile }
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        error:
+          err instanceof Error
+            ? err.message
+            : "An unexpected error occurred while activating administrator access.",
+      }
+    }
+  }
+
   async function signUpWithEmail(
     email: string,
     password: string,
     fullName: string,
-  ): Promise<{ ok: boolean; error?: string }> {
+  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
     if (!isSupabaseConfigured) {
       return {
         ok: false,
@@ -325,11 +462,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      let createdProfile: UserProfile | undefined
       if (data.user) {
-        await fetchProfile(data.user.id, data.user.email || "", fullName.trim())
+        createdProfile =
+          (await fetchProfile(
+            data.user.id,
+            data.user.email || "",
+            fullName.trim(),
+          )) || undefined
       }
 
-      return { ok: true }
+      return { ok: true, profile: createdProfile }
     } catch (err: unknown) {
       return {
         ok: false,
@@ -475,6 +618,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         needsName,
         signInWithEmail,
         signInAsAdmin,
+        promoteToAdmin,
         signUpWithEmail,
         signInWithProvider,
         signInWithPhone,

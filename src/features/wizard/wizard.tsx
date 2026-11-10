@@ -3,12 +3,18 @@ import type { FormData } from "./types"
 import { ScreenShell, Card, Logo, Button, InputField, BackButton, ClockIcon } from "../../shared/ui"
 import { EXAMPLE_GROUPS, PENDING_STEPS } from "./data"
 import type { JoinRequestStatus } from "../admin/types"
-import { isMemberApiConfigured, memberApi } from "../../lib/memberApi"
+import { isMemberApiConfigured } from "../../lib/memberApi"
+import { resolveGroup, groupCodeFromLink } from "./joinGroups"
 
-export function WelcomeScreen({ onStart, onAdmin }: { onStart: () => void; onAdmin: () => void }) {
+export function WelcomeScreen({ onStart, onSignIn, onAdmin, accountsEnabled = false }: {
+  onStart: () => void
+  onSignIn: () => void
+  onAdmin: () => void
+  accountsEnabled?: boolean
+}) {
   return (
     <ScreenShell>
-      <div className="mt-16 flex flex-col items-center gap-10">
+      <div className="mt-10 flex flex-col items-center gap-8">
         <div className="flex flex-col items-center gap-4">
           <div className="p-5 bg-[#1B3A6B] rounded-[22px] shadow-lg">
             <svg width="56" height="56" viewBox="0 0 56 56" fill="none" aria-hidden="true">
@@ -29,10 +35,17 @@ export function WelcomeScreen({ onStart, onAdmin }: { onStart: () => void; onAdm
           <p className="text-xl font-semibold leading-relaxed text-[#1A202C]">Share when you're available and volunteer when your ministry needs help.</p>
         </div>
 
-        <div className="flex w-full flex-col items-center gap-4">
-          <Button onClick={onStart}>Get Started</Button>
+        <div className="flex w-full flex-col items-center gap-3">
+          <Button onClick={onStart}>{accountsEnabled ? "Create account" : "Get Started"}</Button>
+          <Button onClick={onSignIn} variant="secondary">Sign in</Button>
           <Button onClick={onAdmin} variant="ghost">Sign in as Admin</Button>
         </div>
+
+        <p className="text-center text-[15px] leading-relaxed text-[#64748B]">
+          {accountsEnabled
+            ? "Already have an account? Choose Sign in to return to your ministry schedule."
+            : "Member accounts are not connected yet. Add your Supabase keys to .env.local, or continue as a guest."}
+        </p>
       </div>
     </ScreenShell>
   )
@@ -87,13 +100,11 @@ export function JoinGroupScreen({
 
   async function handleJoin() {
     const code = pasteMode
-      ? (pasteLink.split("/").pop() || "").toUpperCase().trim()
+      ? groupCodeFromLink(pasteLink)
       : data.groupCode.trim().toUpperCase()
     if (!code) { setError("Please enter a group code to continue."); return }
     try {
-      const group = isMemberApiConfigured
-        ? await memberApi.lookupGroup(code)
-        : { name: EXAMPLE_GROUPS[code] }
+      const group = await resolveGroup(code)
       if (!group.name) {
         setError("We couldn't find a group with that code. Please check with your group leader and try again.")
         return

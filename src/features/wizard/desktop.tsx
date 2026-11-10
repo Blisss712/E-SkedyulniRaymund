@@ -3,7 +3,8 @@ import type { FormData } from "./types"
 import { Button, InputField, Card, BackButton, ClockIcon } from "../../shared/ui"
 import { EXAMPLE_GROUPS, PENDING_STEPS } from "./data"
 import type { JoinRequestStatus } from "../admin/types"
-import { isMemberApiConfigured, memberApi } from "../../lib/memberApi"
+import { isMemberApiConfigured } from "../../lib/memberApi"
+import { resolveGroup, groupCodeFromLink } from "./joinGroups"
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
@@ -84,12 +85,10 @@ export function DesktopJoinGroupScreen({ data, setData, onJoin, onBack }: {
   const [pasteLink, setPasteLink] = useState("")
 
   async function handleJoin() {
-    const code = pasteMode ? (pasteLink.split("/").pop() || "").toUpperCase().trim() : data.groupCode.trim().toUpperCase()
+    const code = pasteMode ? groupCodeFromLink(pasteLink) : data.groupCode.trim().toUpperCase()
     if (!code) { setError("Please enter a group code to continue."); return }
     try {
-      const group = isMemberApiConfigured
-        ? await memberApi.lookupGroup(code)
-        : { name: EXAMPLE_GROUPS[code] }
+      const group = await resolveGroup(code)
       if (!group.name) {
         setError("We couldn't find a group with that code. Please check with your group leader and try again.")
         return
