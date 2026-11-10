@@ -910,12 +910,21 @@ ON CONFLICT (id) DO NOTHING;
 --   * Any two accounts can start a private conversation. Members find each other
 --     with search_member_accounts(), which matches names and email addresses but
 --     returns email addresses masked.
+--   * Group chat managers (administrators and the ministry's coordinator) can
+--     switch the group between open discussion and announcements only, and can
+--     mute individual members. The message INSERT policy enforces this, so it
+--     cannot be bypassed by calling PostgREST directly.
+--   * get_conversation_participants() also reports each member's role and shared
+--     ministries, which is what the member list, message role badges, and profile
+--     sheet in the app read.
 --   * RLS keeps every conversation, participant row, and message visible only to
 --     the accounts in that conversation. There is no administrator back door into
 --     private chats.
 --
--- The script is idempotent and safe to run again. Existing organizations and
--- their current members are backfilled at the end.
+-- The script is idempotent and safe to run again. Re-running it also upgrades an
+-- earlier messaging install (the new columns are added, and the participant RPC
+-- is recreated). Existing organizations and their current members are backfilled
+-- at the end.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -934,8 +943,14 @@ CREATE TABLE IF NOT EXISTS public.chat_conversations (
     -- The group title (the organization name). Direct chats derive their title
     -- from the other participant, so it stays empty for them.
     title VARCHAR(150) NOT NULL DEFAULT '',
+    -- Group-wide posting policy. 'everyone' lets approved members post;
+    -- 'leaders' turns the group into announcements only: administrators and
+    -- coordinators keep posting, members can still read.
+    posting_mode VARCHAR(20) NOT NULL DEFAULT 'everyone',
     created_by UUID NULL REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chat_conversations_posting_mode_check
+        CHECK (posting_mode IN ('everyone', 'leaders')),
     CONSTRAINT chat_conversations_target CHECK (
         (kind = 'direct' AND organization_id IS NULL AND direct_key IS NOT NULL)
         OR
@@ -943,14 +958,40 @@ CREATE TABLE IF NOT EXISTS public.chat_conversations (
     )
 );
 
+-- Existing projects installed chat_conversations before posting modes existed.
+ALTER TABLE public.chat_conversations
+    ADD COLUMN IF NOT EXISTS posting_mode VARCHAR(20) NOT NULL DEFAULT 'everyone';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'public.chat_conversations'::regclass
+          AND conname = 'chat_conversations_posting_mode_check'
+    ) THEN
+        ALTER TABLE public.chat_conversations
+            ADD CONSTRAINT chat_conversations_posting_mode_check
+            CHECK (posting_mode IN ('everyone', 'leaders'));
+    END IF;
+END
+$$;
+
 CREATE TABLE IF NOT EXISTS public.chat_participants (
     conversation_id UUID NOT NULL REFERENCES public.chat_conversations(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- Messages created after this moment count as unread for this account.
     last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- FALSE when an administrator or coordinator has muted this member in this
+    -- group. Leaders and administrators ignore this flag and can always post.
+    can_post BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (conversation_id, user_id)
 );
+
+-- Existing projects installed chat_participants before individual muting existed.
+ALTER TABLE public.chat_participants
+    ADD COLUMN IF NOT EXISTS can_post BOOLEAN NOT NULL DEFAULT TRUE;
 
 CREATE TABLE IF NOT EXISTS public.chat_messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1005,6 +1046,86 @@ AS $$
         WHEN p_email IS NULL OR position('@' IN p_email) = 0 THEN NULL
         ELSE left(split_part(p_email, '@', 1), 1) || '***@' || split_part(p_email, '@', 2)
     END;
+$$;
+
+-- Whether the signed-in account may send into this conversation.
+--
+--   * every participant of a private chat may send.
+--   * an administrator or the ministry's coordinator may always send in the
+--     ministry's group chat, even in announcements-only mode.
+--   * everybody else may send only when the group is open AND their individual
+--     mute is off.
+--
+-- This is the single source of truth used by the message INSERT policy, so the
+-- controls cannot be bypassed by calling PostgREST directly.
+CREATE OR REPLACE FUNCTION public.can_i_post_to_conversation(p_conversation_id UUID)
+RETURNS BOOLEAN
+LANGUAGE SQL
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.chat_conversations AS conversation
+        JOIN public.chat_participants AS participant
+          ON participant.conversation_id = conversation.id
+         AND participant.user_id = auth.uid()
+        WHERE conversation.id = p_conversation_id
+          AND (
+              conversation.kind = 'direct'
+              OR EXISTS (
+                  SELECT 1
+                  FROM public.admin_profiles AS admin
+                  WHERE admin.user_id = auth.uid()
+                    AND admin.role = 'admin'
+                    AND admin.active = TRUE
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM public.organization_leaders AS leader
+                  WHERE leader.organization_id = conversation.organization_id
+                    AND leader.user_id = auth.uid()
+              )
+              OR (
+                  conversation.posting_mode = 'everyone'
+                  AND participant.can_post = TRUE
+              )
+          )
+    );
+$$;
+
+-- Whether the signed-in account may manage this group chat's posting policy.
+-- Only administrators and the coordinator of the conversation's own ministry
+-- qualify, and only while they are a participant of the chat.
+CREATE OR REPLACE FUNCTION public.can_manage_conversation(p_conversation_id UUID)
+RETURNS BOOLEAN
+LANGUAGE SQL
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT public.is_chat_participant(p_conversation_id) AND EXISTS (
+        SELECT 1
+        FROM public.chat_conversations AS conversation
+        WHERE conversation.id = p_conversation_id
+          AND conversation.kind = 'organization'
+          AND (
+              EXISTS (
+                  SELECT 1
+                  FROM public.admin_profiles AS admin
+                  WHERE admin.user_id = auth.uid()
+                    AND admin.role = 'admin'
+                    AND admin.active = TRUE
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM public.organization_leaders AS leader
+                  WHERE leader.organization_id = conversation.organization_id
+                    AND leader.user_id = auth.uid()
+              )
+          )
+    );
 $$;
 
 -- ------------------------------------------------------------------------------
@@ -1236,13 +1357,20 @@ AS $$
     ORDER BY COALESCE(latest.created_at, conversation.created_at) DESC;
 $$;
 
--- Names and avatars shown in a chat header and next to group messages.
+-- Names, roles, and profiles shown in the chat header, member list, and message
+-- bubbles. The caller must belong to the conversation.
+DROP FUNCTION IF EXISTS public.get_conversation_participants(UUID);
+
 CREATE OR REPLACE FUNCTION public.get_conversation_participants(p_conversation_id UUID)
 RETURNS TABLE (
     user_id UUID,
     full_name TEXT,
     masked_email TEXT,
-    is_self BOOLEAN
+    is_self BOOLEAN,
+    role TEXT,
+    can_post BOOLEAN,
+    joined_at TIMESTAMPTZ,
+    shared_organizations TEXT[]
 )
 LANGUAGE SQL
 STABLE
@@ -1253,13 +1381,168 @@ AS $$
         participant.user_id,
         COALESCE(NULLIF(btrim(profile.full_name), ''), 'Member') AS full_name,
         public.mask_chat_email(profile.email) AS masked_email,
-        (participant.user_id = auth.uid()) AS is_self
+        (participant.user_id = auth.uid()) AS is_self,
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM public.admin_profiles AS admin
+                WHERE admin.user_id = participant.user_id
+                  AND admin.role = 'admin'
+                  AND admin.active = TRUE
+            ) THEN 'admin'
+            WHEN EXISTS (
+                SELECT 1
+                FROM public.chat_conversations AS conversation
+                JOIN public.organization_leaders AS leader
+                  ON leader.organization_id = conversation.organization_id
+                WHERE conversation.id = p_conversation_id
+                  AND leader.user_id = participant.user_id
+            ) THEN 'leader'
+            WHEN EXISTS (
+                SELECT 1
+                FROM public.chat_conversations AS conversation
+                WHERE conversation.id = p_conversation_id
+                  AND conversation.kind = 'direct'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM public.organization_leaders AS leader
+                      WHERE leader.user_id = participant.user_id
+                  )
+            ) THEN 'leader'
+            ELSE 'member'
+        END AS role,
+        participant.can_post,
+        participant.joined_at,
+        ARRAY(
+            SELECT organization.name
+            FROM public.organization_member_accounts AS mine
+            JOIN public.organization_member_accounts AS theirs
+              ON theirs.organization_id = mine.organization_id
+            JOIN public.organizations AS organization
+              ON organization.id = mine.organization_id
+            WHERE mine.user_id = auth.uid()
+              AND theirs.user_id = participant.user_id
+            ORDER BY organization.name
+        ) AS shared_organizations
     FROM public.chat_participants AS participant
     LEFT JOIN public.member_profiles AS profile
       ON profile.user_id = participant.user_id
     WHERE participant.conversation_id = p_conversation_id
       AND public.is_chat_participant(p_conversation_id)
     ORDER BY participant.joined_at ASC;
+$$;
+
+-- Everything the chat screen needs to decide who may post and whether to show
+-- the management controls. Private chats have no management and always allow
+-- both participants to post.
+DROP FUNCTION IF EXISTS public.get_conversation_settings(UUID);
+
+CREATE OR REPLACE FUNCTION public.get_conversation_settings(p_conversation_id UUID)
+RETURNS TABLE (
+    conversation_id UUID,
+    kind VARCHAR(20),
+    organization_id VARCHAR(40),
+    posting_mode VARCHAR(20),
+    can_manage BOOLEAN,
+    can_post BOOLEAN
+)
+LANGUAGE SQL
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT
+        conversation.id AS conversation_id,
+        conversation.kind,
+        conversation.organization_id,
+        CASE
+            WHEN conversation.kind = 'organization' THEN conversation.posting_mode
+            ELSE 'everyone'
+        END AS posting_mode,
+        public.can_manage_conversation(conversation.id) AS can_manage,
+        public.can_i_post_to_conversation(conversation.id) AS can_post
+    FROM public.chat_conversations AS conversation
+    WHERE conversation.id = p_conversation_id
+      AND public.is_chat_participant(conversation.id);
+$$;
+
+-- Switch a ministry group between open discussion and announcements only.
+CREATE OR REPLACE FUNCTION public.update_chat_group_settings(
+    p_conversation_id UUID,
+    p_posting_mode VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF NOT public.can_manage_conversation(p_conversation_id) THEN
+        RAISE EXCEPTION 'Only an administrator or the ministry coordinator can change this chat.';
+    END IF;
+
+    IF p_posting_mode NOT IN ('everyone', 'leaders') THEN
+        RAISE EXCEPTION 'Choose either everyone or leaders for the posting mode.';
+    END IF;
+
+    UPDATE public.chat_conversations
+    SET posting_mode = p_posting_mode
+    WHERE id = p_conversation_id
+      AND kind = 'organization';
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'That group chat was not found.';
+    END IF;
+END;
+$$;
+
+-- Mute or unmute one regular member of a ministry group. Administrators and
+-- coordinators always keep posting access, so they cannot be muted.
+CREATE OR REPLACE FUNCTION public.set_chat_member_can_post(
+    p_conversation_id UUID,
+    p_user_id UUID,
+    p_can_post BOOLEAN
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF NOT public.can_manage_conversation(p_conversation_id) THEN
+        RAISE EXCEPTION 'Only an administrator or the ministry coordinator can change this chat.';
+    END IF;
+
+    IF p_user_id = auth.uid() THEN
+        RAISE EXCEPTION 'You cannot change your own posting access.';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM public.admin_profiles AS admin
+        WHERE admin.user_id = p_user_id
+          AND admin.role = 'admin'
+          AND admin.active = TRUE
+    ) OR EXISTS (
+        SELECT 1
+        FROM public.chat_conversations AS conversation
+        JOIN public.organization_leaders AS leader
+          ON leader.organization_id = conversation.organization_id
+        WHERE conversation.id = p_conversation_id
+          AND leader.user_id = p_user_id
+    ) THEN
+        RAISE EXCEPTION 'Administrators and coordinators always keep posting access.';
+    END IF;
+
+    UPDATE public.chat_participants
+    SET can_post = p_can_post
+    WHERE conversation_id = p_conversation_id
+      AND user_id = p_user_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'That member is not in this chat.';
+    END IF;
+END;
 $$;
 
 -- Moves the read marker to now, which clears the unread badge in the inbox.
@@ -1287,8 +1570,28 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+    v_conversation UUID;
 BEGIN
-    PERFORM public.ensure_organization_chat(NEW.id);
+    v_conversation := public.ensure_organization_chat(NEW.id);
+
+    -- The administrator who creates (or renames) the organization joins its
+    -- group chat, so it appears in their admin workspace Messages section and
+    -- they can manage it. Administrators assigned later join through the
+    -- organization_members trigger below.
+    IF v_conversation IS NOT NULL
+       AND EXISTS (
+           SELECT 1
+           FROM public.admin_profiles AS admin
+           WHERE admin.user_id = auth.uid()
+             AND admin.role = 'admin'
+             AND admin.active = TRUE
+       ) THEN
+        INSERT INTO public.chat_participants (conversation_id, user_id)
+        VALUES (v_conversation, auth.uid())
+        ON CONFLICT (conversation_id, user_id) DO NOTHING;
+    END IF;
+
     RETURN NEW;
 END;
 $$;
@@ -1413,7 +1716,7 @@ CREATE POLICY "Participants send conversation messages" ON public.chat_messages
 FOR INSERT TO authenticated
 WITH CHECK (
     sender_id = auth.uid()
-    AND public.is_chat_participant(conversation_id)
+    AND public.can_i_post_to_conversation(conversation_id)
 );
 
 DROP POLICY IF EXISTS "Senders delete their own messages" ON public.chat_messages;
@@ -1452,6 +1755,21 @@ GRANT EXECUTE ON FUNCTION public.list_my_conversations() TO authenticated;
 
 REVOKE ALL ON FUNCTION public.get_conversation_participants(UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_conversation_participants(UUID) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.can_i_post_to_conversation(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.can_i_post_to_conversation(UUID) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.can_manage_conversation(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.can_manage_conversation(UUID) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.get_conversation_settings(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_conversation_settings(UUID) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.update_chat_group_settings(UUID, VARCHAR) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.update_chat_group_settings(UUID, VARCHAR) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.set_chat_member_can_post(UUID, UUID, BOOLEAN) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_chat_member_can_post(UUID, UUID, BOOLEAN) TO authenticated;
 
 REVOKE ALL ON FUNCTION public.mark_conversation_read(UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.mark_conversation_read(UUID) TO authenticated;
@@ -1550,11 +1868,13 @@ SELECT
     organization.id,
     organization.name,
     conversation.id AS chat_id,
-    COUNT(participant.user_id) AS chat_members
+    conversation.posting_mode,
+    COUNT(participant.user_id) AS chat_members,
+    COUNT(*) FILTER (WHERE participant.can_post) AS members_can_send
 FROM public.organizations AS organization
 LEFT JOIN public.chat_conversations AS conversation
   ON conversation.organization_id = organization.id
 LEFT JOIN public.chat_participants AS participant
   ON participant.conversation_id = conversation.id
-GROUP BY organization.id, organization.name, conversation.id
+GROUP BY organization.id, organization.name, conversation.id, conversation.posting_mode
 ORDER BY organization.name;

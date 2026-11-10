@@ -3,96 +3,37 @@ import { Button, InputField } from "../../shared/ui"
 import { isSupabaseConfigured } from "../../lib/supabase"
 import { useAuth } from "../auth/AuthContext"
 import {
+  fetchConversationSettings,
   fetchConversations,
   fetchMessages,
   fetchParticipants,
   markConversationRead,
   searchChatAccounts,
   sendMessage,
+  setChatMemberCanPost,
   startDirectConversation,
   subscribeToMessages,
+  updateChatPostingMode,
 } from "./api"
 import { DEMO_ME_ID } from "./demo"
 import { useMessaging } from "./MessagingContext"
+import {
+  Avatar,
+  ChatMembersSheet,
+  ChatProfileSheet,
+  RoleBadge,
+  roleRingClass,
+} from "./profile"
 import type {
   ChatConversation,
   ChatMessage,
   ChatParticipant,
   ChatPerson,
+  ChatPostingMode,
+  ChatSettings,
 } from "./types"
 
 // ─── Small presentation helpers ─────────────────────────────────────────────
-
-const AVATAR_COLORS = [
-  "bg-[#1B3A6B]",
-  "bg-[#2D7A4F]",
-  "bg-[#C9921A]",
-  "bg-[#7A4E9E]",
-  "bg-[#B5533C]",
-  "bg-[#2A6F8E]",
-]
-
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean)
-  if (parts.length === 0) return "?"
-  const first = parts[0][0] ?? ""
-  const last = parts.length > 1 ? parts[parts.length - 1][0] ?? "" : ""
-  return `${first}${last}`.toUpperCase()
-}
-
-function avatarColor(seed: string) {
-  let hash = 0
-  for (let index = 0; index < seed.length; index += 1) {
-    hash = (hash * 31 + seed.charCodeAt(index)) >>> 0
-  }
-  return AVATAR_COLORS[hash % AVATAR_COLORS.length]
-}
-
-function Avatar({
-  name,
-  seed,
-  group = false,
-  size = "md",
-  className = "",
-}: {
-  name: string
-  seed: string
-  group?: boolean
-  size?: "sm" | "md"
-  className?: string
-}) {
-  const dimensions = size === "sm" ? "h-9 w-9 text-[12px]" : "h-12 w-12 text-[15px]"
-  return (
-    <span
-      className={`flex shrink-0 items-center justify-center rounded-full font-extrabold text-white ${dimensions} ${avatarColor(seed)} ${className}`}
-      aria-hidden="true"
-    >
-      {group ? (
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          className={size === "sm" ? "h-5 w-5" : "h-6 w-6"}
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M16 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-3A3.5 3.5 0 0 0 6 17.5V19"
-          />
-          <circle cx="10.5" cy="8" r="3" />
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M18 19v-1.5a3.5 3.5 0 0 0-2.5-3.35M15.5 5.2a3 3 0 0 1 0 5.6"
-          />
-        </svg>
-      ) : (
-        initials(name)
-      )}
-    </span>
-  )
-}
 
 function formatListTime(value: string | null) {
   if (!value) return ""
@@ -134,6 +75,72 @@ function formatMessageTime(value: string) {
     minute: "2-digit",
   })
 }
+
+function LockIcon({ small = false }: { small?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      className={small ? "h-3.5 w-3.5" : "h-5 w-5"}
+      aria-hidden="true"
+    >
+      <rect x="5" y="10" width="14" height="10" rx="2" />
+      <path strokeLinecap="round" d="M8 10V7a4 4 0 0 1 8 0v3" />
+    </svg>
+  )
+}
+
+function PeopleIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      className="h-6 w-6"
+      aria-hidden="true"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M16 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-3A3.5 3.5 0 0 0 6 17.5V19"
+      />
+      <circle cx="10.5" cy="8" r="3" />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M18 19v-1.5a3.5 3.5 0 0 0-2.5-3.35M15.5 5.2a3 3 0 0 1 0 5.6"
+      />
+    </svg>
+  )
+}
+
+function ProfileIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      className="h-6 w-6"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="8" r="4" />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M5 20a7 7 0 0 1 14 0"
+      />
+    </svg>
+  )
+}
+
+type PeopleView =
+  | { type: "members" }
+  | { type: "profile"; userId: string; fromMembers: boolean }
+  | null
 
 // ─── Inbox + account search ─────────────────────────────────────────────────
 
@@ -464,7 +471,7 @@ export function MessagesPanel({
       <p className="text-xs leading-relaxed text-[#94A3B8]">
         Private chats are visible only to the two accounts in them. Ministry
         group chats include every approved member and assigned administrator of
-        that ministry.
+        that ministry; coordinators and administrators can limit who can post.
       </p>
     </div>
   )
@@ -475,18 +482,24 @@ export function MessagesPanel({
 export function ChatScreen({
   conversation,
   onBack,
+  onSwitchConversation,
 }: {
   conversation: ChatConversation
   onBack: () => void
+  onSwitchConversation: (conversation: ChatConversation) => void
 }) {
   const { user, profile } = useAuth()
   const { refresh } = useMessaging()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [participants, setParticipants] = useState<ChatParticipant[]>([])
+  const [settings, setSettings] = useState<ChatSettings | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [draft, setDraft] = useState("")
   const [sending, setSending] = useState(false)
+  const [peopleView, setPeopleView] = useState<PeopleView>(null)
+  const [peopleBusy, setPeopleBusy] = useState(false)
+  const [peopleError, setPeopleError] = useState("")
   const endRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const messagesRef = useRef<ChatMessage[]>([])
@@ -508,26 +521,174 @@ export function ChatScreen({
     return participantNames.get(senderId) ?? "Member"
   }
 
+  const resolvedSettings: ChatSettings = settings ?? {
+    conversationId: conversation.id,
+    kind: conversation.kind,
+    organizationId: conversation.organizationId,
+    postingMode: "everyone",
+    canManage: false,
+    canPost: true,
+  }
+  const canManage = resolvedSettings.canManage
+  const canPost = resolvedSettings.canPost
+  const otherParticipant =
+    conversation.kind === "direct"
+      ? participants.find(
+          participant => participant.userId === conversation.otherUserId,
+        )
+      : undefined
+  const profileParticipant =
+    peopleView?.type === "profile"
+      ? participants.find(
+          participant => participant.userId === peopleView.userId,
+        )
+      : undefined
+
+  function roleOf(userId: string) {
+    return (
+      participants.find(participant => participant.userId === userId)?.role ??
+      "member"
+    )
+  }
+
+  function openMembers() {
+    setPeopleError("")
+    setPeopleView({ type: "members" })
+    void fetchParticipants(conversation.id)
+      .then(setParticipants)
+      .catch(() => undefined)
+    void fetchConversationSettings(conversation.id)
+      .then(setSettings)
+      .catch(() => undefined)
+  }
+
+  function openProfile(userId: string, fromMembers = false) {
+    setPeopleError("")
+    setPeopleView({ type: "profile", userId, fromMembers })
+  }
+
+  function closePeople() {
+    setPeopleView(null)
+    setPeopleError("")
+  }
+
+  async function refreshPeople() {
+    const [nextSettings, nextParticipants] = await Promise.all([
+      fetchConversationSettings(conversation.id).catch(() => null),
+      fetchParticipants(conversation.id).catch(() => null),
+    ])
+    if (nextSettings) setSettings(nextSettings)
+    if (nextParticipants) setParticipants(nextParticipants)
+  }
+
+  async function handleSetPostingMode(mode: ChatPostingMode) {
+    if (!canManage || mode === resolvedSettings.postingMode) return
+    setPeopleBusy(true)
+    setPeopleError("")
+    try {
+      await updateChatPostingMode(conversation.id, mode)
+      await refreshPeople()
+    } catch (reason) {
+      setPeopleError(
+        reason instanceof Error
+          ? reason.message
+          : "Unable to update the group settings.",
+      )
+    } finally {
+      setPeopleBusy(false)
+    }
+  }
+
+  async function handleToggleCanPost(participant: ChatParticipant) {
+    if (
+      !canManage ||
+      participant.role !== "member" ||
+      participant.isSelf
+    ) {
+      return
+    }
+
+    setPeopleBusy(true)
+    setPeopleError("")
+    try {
+      await setChatMemberCanPost(
+        conversation.id,
+        participant.userId,
+        !participant.canPost,
+      )
+      await refreshPeople()
+    } catch (reason) {
+      setPeopleError(
+        reason instanceof Error
+          ? reason.message
+          : "Unable to change this member's access.",
+      )
+    } finally {
+      setPeopleBusy(false)
+    }
+  }
+
+  async function handleMessageParticipant(participant: ChatParticipant) {
+    setPeopleBusy(true)
+    setPeopleError("")
+    try {
+      const conversationId = await startDirectConversation(participant.userId)
+      const list = await fetchConversations().catch(() => [])
+      const saved = list.find(item => item.id === conversationId)
+      const next: ChatConversation = saved ?? {
+        id: conversationId,
+        kind: "direct",
+        title: participant.fullName,
+        organizationId: null,
+        otherUserId: participant.userId,
+        otherUserName: participant.fullName,
+        otherUserEmail: participant.maskedEmail,
+        lastMessage: "",
+        lastMessageAt: new Date().toISOString(),
+        unreadCount: 0,
+        memberCount: 2,
+      }
+      closePeople()
+      onSwitchConversation(next)
+    } catch (reason) {
+      setPeopleError(
+        reason instanceof Error
+          ? reason.message
+          : "Unable to start that conversation.",
+      )
+    } finally {
+      setPeopleBusy(false)
+    }
+  }
+
   function readNow() {
     void markConversationRead(conversation.id).then(() => {
       void refresh()
     })
   }
 
-  // Load the history and members.
+  // Load the history, members, and posting policy.
   useEffect(() => {
     let active = true
     setLoading(true)
     setError("")
+    setMessages([])
+    setParticipants([])
+    setSettings(null)
+    setPeopleView(null)
+    setPeopleError("")
+    setPeopleBusy(false)
 
     Promise.all([
       fetchMessages(conversation.id),
       fetchParticipants(conversation.id),
+      fetchConversationSettings(conversation.id).catch(() => null),
     ])
-      .then(([savedMessages, people]) => {
+      .then(([savedMessages, people, config]) => {
         if (!active) return
         setMessages(savedMessages)
         setParticipants(people)
+        if (config) setSettings(config)
         setLoading(false)
         readNow()
       })
@@ -546,6 +707,19 @@ export function ChatScreen({
     }
     // readNow is deliberately not a dependency: it only writes the read marker.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation.id])
+
+  // Settings change while the chat may be open (a coordinator switches the group
+  // to announcements only, or mutes somebody). Re-read them periodically so the
+  // composer locks without needing a reopen.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void fetchConversationSettings(conversation.id)
+        .then(setSettings)
+        .catch(() => undefined)
+    }, 20_000)
+
+    return () => window.clearInterval(timer)
   }, [conversation.id])
 
   // Receive new messages while the conversation is open.
@@ -668,16 +842,40 @@ export function ChatScreen({
             className="ring-2 ring-white/30"
           />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[16px] font-extrabold">
-              {conversation.title}
-            </p>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <p className="truncate text-[16px] font-extrabold">
+                {conversation.title}
+              </p>
+              {!isGroup && otherParticipant && (
+                <RoleBadge role={otherParticipant.role} compact />
+              )}
+            </div>
             <p className="truncate text-[11px] text-white/65">{subtitle}</p>
           </div>
-          {isGroup && (
-            <span className="hidden shrink-0 rounded-full bg-white/15 px-3 py-1 text-[11px] font-bold text-white sm:inline-flex">
-              Group
-            </span>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              if (isGroup) openMembers()
+              else if (otherParticipant) openProfile(otherParticipant.userId)
+            }}
+            disabled={!isGroup && !otherParticipant}
+            aria-label={isGroup ? "View group members" : "View profile"}
+            title={isGroup ? "View group members" : "View profile"}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/25 text-white transition-colors hover:bg-white/10 disabled:opacity-40"
+          >
+            {isGroup ? (
+              <span className="relative">
+                <PeopleIcon />
+                {participants.length > 0 && (
+                  <span className="absolute -right-2.5 -top-2.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-white/20 px-1 text-[9px] font-extrabold text-white">
+                    {participants.length > 99 ? "99+" : participants.length}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <ProfileIcon />
+            )}
+          </button>
         </div>
       </header>
 
@@ -685,9 +883,10 @@ export function ChatScreen({
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-2.5 px-4 py-5">
           {isGroup && (
             <p className="mx-auto mb-1 max-w-md rounded-xl bg-[#E8EDF7] px-3 py-2 text-center text-[11px] leading-relaxed text-[#64748B]">
-              Everyone in {conversation.title} can read this group chat.
-              Approved members and assigned administrators are added
-              automatically.
+              Everyone in {conversation.title} can read this group chat.{" "}
+              {resolvedSettings.postingMode === "leaders"
+                ? "Only administrators and coordinators can send while announcements-only is on."
+                : "Approved members and assigned administrators are added automatically."}
             </p>
           )}
 
@@ -732,24 +931,60 @@ export function ChatScreen({
             messages.map((message, index) => {
               const mine = message.senderId === myId
               const previous = messages[index - 1]
-              const showSender = isGroup && !mine && previous?.senderId !== message.senderId
+              const startsRun = previous?.senderId !== message.senderId
+              const senderRole = roleOf(message.senderId)
+              const showSender = isGroup && !mine && startsRun
+              const showAvatar = !mine && startsRun
+              const name = senderName(message.senderId)
+              const accent =
+                !mine && senderRole === "leader"
+                  ? "ring-1 ring-[#C9921A]/40"
+                  : !mine && senderRole === "admin"
+                    ? "ring-1 ring-[#1B3A6B]/25"
+                    : ""
 
               return (
                 <div
                   key={message.id}
-                  className={`flex ${mine ? "justify-end" : "justify-start"}`}
+                  className={`flex items-end gap-2 ${mine ? "justify-end" : "justify-start"}`}
                 >
+                  {!mine &&
+                    (showAvatar ? (
+                      <button
+                        type="button"
+                        onClick={() => openProfile(message.senderId)}
+                        aria-label={`View ${name}'s profile`}
+                        title={`View ${name}'s profile`}
+                        className="shrink-0 self-end rounded-full"
+                      >
+                        <Avatar
+                          name={name}
+                          seed={message.senderId}
+                          size="xs"
+                          className={roleRingClass(senderRole)}
+                        />
+                      </button>
+                    ) : (
+                      <span className="w-7 shrink-0" aria-hidden="true" />
+                    ))}
                   <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm sm:max-w-[75%] ${
+                    className={`max-w-[78%] rounded-2xl px-4 py-2.5 shadow-sm sm:max-w-[72%] ${accent} ${
                       mine
                         ? "rounded-br-md bg-[#1B3A6B] text-white"
                         : "rounded-bl-md border border-[#D1D9E8] bg-white text-[#1A202C]"
                     }`}
                   >
                     {showSender && (
-                      <p className="mb-1 text-[11px] font-extrabold text-[#C9921A]">
-                        {senderName(message.senderId)}
-                      </p>
+                      <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => openProfile(message.senderId)}
+                          className="text-[11px] font-extrabold text-[#C9921A] hover:underline"
+                        >
+                          {name}
+                        </button>
+                        <RoleBadge role={senderRole} compact />
+                      </div>
                     )}
                     <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
                       {message.body}
@@ -783,67 +1018,140 @@ export function ChatScreen({
               {error}
             </p>
           )}
-          <form
-            onSubmit={event => {
-              event.preventDefault()
-              void submit()
-            }}
-            className="flex items-end gap-2"
-          >
-            <label htmlFor="message-draft" className="sr-only">
-              Message
-            </label>
-            <textarea
-              id="message-draft"
-              ref={inputRef}
-              rows={1}
-              value={draft}
-              maxLength={4000}
-              onChange={event => setDraft(event.target.value)}
-              onKeyDown={event => {
-                if (
-                  event.key === "Enter" &&
-                  !event.shiftKey &&
-                  !event.nativeEvent.isComposing
-                ) {
+          {!canPost ? (
+            <div className="flex items-center gap-3 rounded-xl border border-[#D1D9E8] bg-[#F4F6FB] p-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#E8EDF7] text-[#1B3A6B]">
+                <LockIcon />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] font-extrabold text-[#1A202C]">
+                  {!isGroup
+                    ? "You cannot send messages right now"
+                    : resolvedSettings.postingMode === "leaders"
+                      ? "Announcements only"
+                      : "You are muted in this group"}
+                </p>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-[#64748B]">
+                  {!isGroup
+                    ? "Sending is unavailable in this conversation right now."
+                    : resolvedSettings.postingMode === "leaders"
+                      ? "Only administrators and coordinators can send messages. You can still read this group."
+                      : "A coordinator has muted your messages in this group."}
+                </p>
+              </div>
+              {isGroup && (
+                <button
+                  type="button"
+                  onClick={openMembers}
+                  className="min-h-9 shrink-0 rounded-xl border border-[#D1D9E8] bg-white px-2.5 text-[11px] font-bold text-[#1B3A6B] hover:bg-[#F4F6FB]"
+                >
+                  Members
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              {isGroup && resolvedSettings.postingMode === "leaders" && (
+                <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-[#FEF3DC] px-3 py-2 text-[11px] font-semibold text-[#8A6410]">
+                  <LockIcon small />
+                  Announcements only — members can read but not send.
+                </p>
+              )}
+              <form
+                onSubmit={event => {
                   event.preventDefault()
                   void submit()
-                }
-              }}
-              placeholder={isGroup ? "Message the group" : "Write a message"}
-              className="max-h-32 min-h-12 w-full resize-none rounded-xl border-2 border-[#D1D9E8] bg-white px-4 py-3 text-[15px] leading-snug text-[#1A202C] placeholder-[#94A3B8] transition-colors focus:border-[#1B3A6B] focus:outline-none focus:ring-2 focus:ring-[#1B3A6B]/20"
-            />
-            <button
-              type="submit"
-              disabled={!draft.trim() || sending}
-              aria-label="Send message"
-              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#1B3A6B] text-white transition-colors hover:bg-[#142d54] disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {sending ? (
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-              ) : (
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.9"
-                  className="h-5 w-5"
-                  aria-hidden="true"
+                }}
+                className="flex items-end gap-2"
+              >
+                <label htmlFor="message-draft" className="sr-only">
+                  Message
+                </label>
+                <textarea
+                  id="message-draft"
+                  ref={inputRef}
+                  rows={1}
+                  value={draft}
+                  maxLength={4000}
+                  onChange={event => setDraft(event.target.value)}
+                  onKeyDown={event => {
+                    if (
+                      event.key === "Enter" &&
+                      !event.shiftKey &&
+                      !event.nativeEvent.isComposing
+                    ) {
+                      event.preventDefault()
+                      void submit()
+                    }
+                  }}
+                  placeholder={isGroup ? "Message the group" : "Write a message"}
+                  className="max-h-32 min-h-12 w-full resize-none rounded-xl border-2 border-[#D1D9E8] bg-white px-4 py-3 text-[15px] leading-snug text-[#1A202C] placeholder-[#94A3B8] transition-colors focus:border-[#1B3A6B] focus:outline-none focus:ring-2 focus:ring-[#1B3A6B]/20"
+                />
+                <button
+                  type="submit"
+                  disabled={!draft.trim() || sending}
+                  aria-label="Send message"
+                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#1B3A6B] text-white transition-colors hover:bg-[#142d54] disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="m4.5 12 15-7-4 15-3.5-6.5L4.5 12Z"
-                  />
-                </svg>
-              )}
-            </button>
-          </form>
-          <p className="mt-1.5 px-1 text-[10px] text-[#94A3B8]">
-            Enter sends · Shift + Enter adds a line
-          </p>
+                  {sending ? (
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  ) : (
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      className="h-5 w-5"
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="m4.5 12 15-7-4 15-3.5-6.5L4.5 12Z"
+                      />
+                    </svg>
+                  )}
+                </button>
+              </form>
+              <p className="mt-1.5 px-1 text-[10px] text-[#94A3B8]">
+                Enter sends · Shift + Enter adds a line
+              </p>
+            </>
+          )}
         </div>
       </div>
+
+      {peopleView?.type === "members" && (
+        <ChatMembersSheet
+          conversation={conversation}
+          participants={participants}
+          settings={resolvedSettings}
+          busy={peopleBusy}
+          error={peopleError}
+          onClose={closePeople}
+          onOpenProfile={participant => openProfile(participant.userId, true)}
+          onSetPostingMode={handleSetPostingMode}
+          onToggleCanPost={handleToggleCanPost}
+        />
+      )}
+
+      {peopleView?.type === "profile" && profileParticipant && (
+        <ChatProfileSheet
+          conversation={conversation}
+          participant={profileParticipant}
+          settings={resolvedSettings}
+          busy={peopleBusy}
+          error={peopleError}
+          onClose={closePeople}
+          onBack={
+            peopleView.fromMembers
+              ? () => setPeopleView({ type: "members" })
+              : undefined
+          }
+          onMessage={handleMessageParticipant}
+          onToggleCanPost={handleToggleCanPost}
+        />
+      )}
     </div>
   )
 }

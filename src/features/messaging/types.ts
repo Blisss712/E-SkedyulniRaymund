@@ -2,6 +2,12 @@
  *  organization's automatic group chat. */
 export type ConversationKind = "direct" | "organization"
 
+/** Who the account is inside the chat's context. */
+export type ChatRole = "admin" | "leader" | "member"
+
+/** Open discussion, or announcements only (leaders/admins keep posting). */
+export type ChatPostingMode = "everyone" | "leaders"
+
 export type ChatConversation = {
   id: string
   kind: ConversationKind
@@ -32,6 +38,25 @@ export type ChatParticipant = {
   fullName: string
   maskedEmail: string
   isSelf: boolean
+  /** Administrator, coordinator of this ministry, or regular member. */
+  role: ChatRole
+  /** The member's individual mute switch (leaders/admins always post). */
+  canPost: boolean
+  joinedAt: string
+  /** Ministries both the viewer and this account belong to. */
+  sharedOrganizations: string[]
+}
+
+/** Group posting policy and the viewer's control/post permissions. */
+export type ChatSettings = {
+  conversationId: string
+  kind: ConversationKind
+  organizationId: string | null
+  postingMode: ChatPostingMode
+  /** True for an administrator or the ministry's coordinator. */
+  canManage: boolean
+  /** Whether the signed-in account can send a message right now. */
+  canPost: boolean
 }
 
 /** An account returned by the "find someone to message" search. */

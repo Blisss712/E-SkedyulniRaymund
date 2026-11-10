@@ -326,7 +326,12 @@ The member dashboard's **Messages** tab — and the same **Messages** section in
 Administrator and Coordinator workspaces — lets every account:
 
 - search the other member accounts by full name or email address and start a private chat;
-- read and post in the group chat that every organization gets automatically.
+- read and post in the group chat that every organization gets automatically;
+- open the member list, see each person's profile, and see who is an administrator or
+  coordinator in the conversation.
+
+Administrators and coordinators additionally control who may post in a ministry group:
+they can switch the whole group to announcements only, or mute individual members.
 
 ### Install
 
@@ -338,8 +343,13 @@ idempotent and also:
 - creates one group chat for every organization that already exists, and adds the
   organization's current approved members and assigned administrators;
 - creates the triggers that keep that membership in sync from then on;
+- adds the group posting mode and individual mute columns;
 - adds the chat tables to the `supabase_realtime` publication;
-- installs the account-search and conversation RPCs used by the app.
+- installs the account-search, conversation, member-profile, and group-control RPCs.
+
+If an earlier version of `messaging.sql` was already installed, **re-run this updated
+script**. It adds the new columns, recreates the participant RPC with the role/profile
+fields, and replaces the message INSERT policy with the posting-control check.
 
 If the app shows **"Messaging is not set up in Supabase yet"**, that script has not been
 run on the project the app is pointed at.
@@ -348,7 +358,7 @@ run on the project the app is pointed at.
 
 | Event | What happens in the chat |
 | --- | --- |
-| An organization is created | A group chat titled with the organization name is created. |
+| An organization is created | A group chat titled with the organization name is created, and the administrator who created it is added. |
 | The organization is renamed | The group chat is renamed too. |
 | A join request is approved | The new approved member is added to the group chat. |
 | An administrator is assigned to the organization | They are added to the group chat as well. |
@@ -358,14 +368,62 @@ run on the project the app is pointed at.
 The triggers run in the database, so this also works for organizations created by the
 admin workspace, by the optional FastAPI backend, or directly in SQL.
 
+### Member list, profiles, and role badges
+
+Inside a group chat, the people button in the header opens **Members**. It lists every
+participant (approved members plus assigned administrators) with:
+
+- their name and masked email;
+- a **Coordinator**, **Admin**, or **Member** badge;
+- whether they can send messages, and a **Mute**/**Allow** action for the managers.
+
+Tapping a member opens their profile: their role, shared ministries, when they joined the
+chat, a **Message privately** button, and (for managers) the mute action. Tapping a
+message sender's name or avatar opens the same profile.
+
+The role comes from the database, not the browser:
+
+| Role | Determined by |
+| --- | --- |
+| **Admin** | an active row in `admin_profiles` |
+| **Coordinator** | an `organization_leaders` appointment for this group's organization |
+| **Member** | every other participant |
+
+Every group message from an administrator or coordinator shows a colored role badge, and
+their avatar/bubble has a matching ring. Private chats show the other account's role next
+to their name in the header.
+
+### Group controls
+
+Administrators and the ministry's coordinator get a **Group controls** card in the
+Members sheet:
+
+| Setting | Behaviour |
+| --- | --- |
+| **Everyone** | Every approved member can send messages. |
+| **Announcements only** | Members can read the group but cannot send; administrators and coordinators can still post. |
+| **Mute / Allow** (per member) | Applies to individual regular members while the group is open. Administrators and coordinators always keep posting access. |
+
+These controls are enforced in the database: the `chat_messages` INSERT policy calls
+`can_i_post_to_conversation()`. A muted member (or a member in an announcements-only
+group) cannot bypass the UI by calling PostgREST directly. Private chats have no group
+controls and both participants can always send.
+
+Changes are picked up by the open chat screen through a short polling refresh, so a
+member's composer locks when a coordinator mutes them or switches the group to
+announcements only.
+
 ### Privacy and security
 
 - A private chat is visible only to its two participants. Administrators have no
   read access to other people's private conversations.
 - RLS rejects a message written as somebody else, and rejects reads or posts in a
   conversation the account does not belong to.
-- Account search never returns a whole email address: results show a masked address
-  and, when there is one, a ministry both accounts belong to.
+- Account search and the member profile return masked email addresses only; profiles
+  show shared ministries, not a person's full ministry list.
+- Group management is restricted to administrators who are participants of the group
+  and the coordinator of that specific ministry. A coordinator of another ministry
+  cannot change another group.
 - The read marker is written only through `mark_conversation_read()`; the app has no
   direct UPDATE privilege on membership rows.
 
@@ -390,17 +448,20 @@ or use this read-only summary:
 SELECT
     organization.name,
     conversation.id AS chat_id,
-    COUNT(participant.user_id) AS chat_members
+    conversation.posting_mode,
+    COUNT(participant.user_id) AS chat_members,
+    COUNT(*) FILTER (WHERE participant.can_post) AS members_can_send
 FROM public.organizations AS organization
 LEFT JOIN public.chat_conversations AS conversation
   ON conversation.organization_id = organization.id
 LEFT JOIN public.chat_participants AS participant
   ON participant.conversation_id = conversation.id
-GROUP BY organization.name, conversation.id
+GROUP BY organization.name, conversation.id, conversation.posting_mode
 ORDER BY organization.name;
 ```
 
-Every organization should have a non-null `chat_id`.
+Every organization should have a non-null `chat_id`. A `posting_mode` of `leaders` means
+the group is in announcements-only mode.
 
 ### Realtime
 

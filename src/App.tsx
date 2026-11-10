@@ -683,7 +683,11 @@ export default function App() {
     // ─── Messages ─────────────────────────────────────────────────────────────
     case "chat":
       return activeConversation ? (
-        <ChatScreen conversation={activeConversation} onBack={closeChat} />
+        <ChatScreen
+          conversation={activeConversation}
+          onBack={closeChat}
+          onSwitchConversation={setActiveConversation}
+        />
       ) : null
   }
 }

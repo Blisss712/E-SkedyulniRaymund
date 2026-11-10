@@ -3,6 +3,9 @@ import type {
   ChatMessage,
   ChatParticipant,
   ChatPerson,
+  ChatPostingMode,
+  ChatRole,
+  ChatSettings,
 } from "./types"
 
 /**
@@ -12,6 +15,33 @@ import type {
  */
 
 export const DEMO_ME_ID = "demo-me"
+
+const DEMO_ROLES: Record<string, ChatRole> = {
+  [DEMO_ME_ID]: "leader",
+  "demo-maria": "leader",
+  "demo-juan": "member",
+  "demo-ana": "member",
+  "demo-ramon": "admin",
+}
+
+const DEMO_SHARED_ORGANIZATIONS: Record<string, string[]> = {
+  [DEMO_ME_ID]: ["Parish Music Ministry"],
+  "demo-maria": ["Parish Music Ministry"],
+  "demo-juan": [],
+  "demo-ana": ["Youth Ministry"],
+  "demo-ramon": [],
+}
+
+const DEMO_JOINED_AT: Record<string, string> = {
+  [DEMO_ME_ID]: minutesAgo(500),
+  "demo-maria": minutesAgo(900),
+  "demo-juan": minutesAgo(850),
+  "demo-ana": minutesAgo(700),
+  "demo-ramon": minutesAgo(600),
+}
+
+let demoPostingMode: ChatPostingMode = "everyone"
+const demoMuted = new Set<string>()
 
 export const DEMO_PEOPLE: ChatPerson[] = [
   {
@@ -62,10 +92,10 @@ const BASE_CONVERSATIONS: ChatConversation[] = [
     otherUserId: null,
     otherUserName: null,
     otherUserEmail: null,
-    lastMessage: "Rehearsal moved to 6 PM this Saturday.",
-    lastMessageAt: minutesAgo(34),
+    lastMessage: "Please keep the rehearsal focused; we have limited time.",
+    lastMessageAt: minutesAgo(20),
     unreadCount: 2,
-    memberCount: 9,
+    memberCount: 5,
   },
   {
     id: "demo-direct-maria",
@@ -122,6 +152,13 @@ function seedMessages(conversationId: string): ChatMessage[] {
         senderId: "demo-maria",
         body: "Rehearsal moved to 6 PM this Saturday.",
         createdAt: minutesAgo(34),
+      },
+      {
+        id: "demo-msg-8",
+        conversationId,
+        senderId: "demo-ramon",
+        body: "Please keep the rehearsal focused; we have limited time.",
+        createdAt: minutesAgo(20),
       },
     ]
   }
@@ -257,24 +294,44 @@ export function startDemoConversation(otherUserId: string): string {
   return id
 }
 
-export function demoParticipants(conversationId: string): ChatParticipant[] {
-  const me: ChatParticipant = {
-    userId: DEMO_ME_ID,
-    fullName: "You",
-    maskedEmail: "y***@example.org",
-    isSelf: true,
+function demoParticipant(
+  userId: string,
+  fullName: string,
+  maskedEmail: string,
+  isSelf: boolean,
+): ChatParticipant {
+  const role = DEMO_ROLES[userId] ?? "member"
+  return {
+    userId,
+    fullName,
+    maskedEmail,
+    isSelf,
+    role,
+    // Leaders and administrators always keep posting access.
+    canPost: role === "member" ? !demoMuted.has(userId) : true,
+    joinedAt: DEMO_JOINED_AT[userId] ?? minutesAgo(500),
+    sharedOrganizations: DEMO_SHARED_ORGANIZATIONS[userId] ?? [],
   }
+}
+
+export function demoParticipants(conversationId: string): ChatParticipant[] {
+  const me = demoParticipant(
+    DEMO_ME_ID,
+    "You",
+    "y***@example.org",
+    true,
+  )
 
   if (conversationId === DEMO_GROUP_ID) {
     return [
       me,
-      ...DEMO_PEOPLE.filter(person => person.userId !== "demo-ramon").map(
-        person => ({
-          userId: person.userId,
-          fullName: person.fullName,
-          maskedEmail: person.maskedEmail,
-          isSelf: false,
-        }),
+      ...DEMO_PEOPLE.map(person =>
+        demoParticipant(
+          person.userId,
+          person.fullName,
+          person.maskedEmail,
+          false,
+        ),
       ),
     ]
   }
@@ -285,12 +342,41 @@ export function demoParticipants(conversationId: string): ChatParticipant[] {
   return person
     ? [
         me,
-        {
-          userId: person.userId,
-          fullName: person.fullName,
-          maskedEmail: person.maskedEmail,
-          isSelf: false,
-        },
+        demoParticipant(
+          person.userId,
+          person.fullName,
+          person.maskedEmail,
+          false,
+        ),
       ]
     : [me]
+}
+
+export function demoConversationSettings(
+  conversationId: string,
+): ChatSettings {
+  const conversation = BASE_CONVERSATIONS.find(item => item.id === conversationId)
+  const group = conversation?.kind === "organization"
+
+  return {
+    conversationId,
+    kind: group ? "organization" : "direct",
+    organizationId: conversation?.organizationId ?? null,
+    postingMode: group ? demoPostingMode : "everyone",
+    // The demo's signed-in account is the music ministry's coordinator.
+    canManage: group,
+    canPost: true,
+  }
+}
+
+export function updateDemoPostingMode(
+  conversationId: string,
+  mode: ChatPostingMode,
+) {
+  if (conversationId === DEMO_GROUP_ID) demoPostingMode = mode
+}
+
+export function setDemoCanPost(userId: string, canPost: boolean) {
+  if (canPost) demoMuted.delete(userId)
+  else demoMuted.add(userId)
 }

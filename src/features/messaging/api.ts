@@ -1,17 +1,23 @@
 import { isSupabaseConfigured, supabase } from "../../lib/supabase"
 import {
   appendDemoMessage,
+  demoConversationSettings,
   demoParticipants,
   readDemoConversations,
   readDemoMessages,
   searchDemoPeople,
+  setDemoCanPost,
   startDemoConversation,
+  updateDemoPostingMode,
 } from "./demo"
 import type {
   ChatConversation,
   ChatMessage,
   ChatParticipant,
   ChatPerson,
+  ChatPostingMode,
+  ChatRole,
+  ChatSettings,
   ConversationKind,
 } from "./types"
 
@@ -23,7 +29,10 @@ import type {
  *   search_member_accounts()      find another account by name or email
  *   start_direct_conversation()   open (or reuse) the private chat with them
  *   list_my_conversations()       the inbox, with previews and unread counts
- *   get_conversation_participants() the people in a chat
+ *   get_conversation_participants() people, roles, profiles, and mute state
+ *   get_conversation_settings()   posting mode + the viewer's permissions
+ *   update_chat_group_settings()  announcements-only / open discussion
+ *   set_chat_member_can_post()    mute or unmute one member
  *   mark_conversation_read()      clear this account's unread badge
  *
  * A project without a configured Supabase client falls back to the local demo
@@ -64,6 +73,19 @@ type ParticipantRow = {
   full_name: string | null
   masked_email: string | null
   is_self: boolean
+  role?: string | null
+  can_post?: boolean | null
+  joined_at?: string | null
+  shared_organizations?: string[] | null
+}
+
+type SettingsRow = {
+  conversation_id: string
+  kind: string
+  organization_id: string | null
+  posting_mode: string | null
+  can_manage: boolean | null
+  can_post: boolean | null
 }
 
 function fromSupabase(
@@ -131,12 +153,28 @@ function personFromRow(row: PersonRow): ChatPerson {
   }
 }
 
+function roleFromValue(value: string | null | undefined): ChatRole {
+  return value === "admin" || value === "leader" ? value : "member"
+}
+
+function postingModeFromValue(
+  value: string | null | undefined,
+): ChatPostingMode {
+  return value === "leaders" ? "leaders" : "everyone"
+}
+
 function participantFromRow(row: ParticipantRow): ChatParticipant {
   return {
     userId: row.user_id,
     fullName: row.full_name?.trim() || "Member",
     maskedEmail: row.masked_email ?? "",
     isSelf: row.is_self,
+    role: roleFromValue(row.role),
+    // Projects on the earlier messaging schema do not return can_post; treat
+    // those participants as able to post until the updated SQL is installed.
+    canPost: row.can_post !== false,
+    joinedAt: row.joined_at ?? "",
+    sharedOrganizations: row.shared_organizations ?? [],
   }
 }
 
@@ -206,6 +244,67 @@ export async function fetchParticipants(
   })
   if (error) throw fromSupabase(error, "Unable to load the conversation members.")
   return ((data ?? []) as ParticipantRow[]).map(participantFromRow)
+}
+
+/** Group posting policy plus the signed-in account's control/post rights. */
+export async function fetchConversationSettings(
+  conversationId: string,
+): Promise<ChatSettings> {
+  if (!isSupabaseConfigured) {
+    return demoConversationSettings(conversationId)
+  }
+
+  const { data, error } = await supabase.rpc("get_conversation_settings", {
+    p_conversation_id: conversationId,
+  })
+  if (error) throw fromSupabase(error, "Unable to load the chat settings.")
+  const row = ((data ?? []) as SettingsRow[])[0]
+  if (!row) throw new Error("That conversation is not available to this account.")
+
+  return {
+    conversationId: row.conversation_id,
+    kind: conversationKind(row.kind),
+    organizationId: row.organization_id,
+    postingMode: postingModeFromValue(row.posting_mode),
+    canManage: row.can_manage === true,
+    canPost: row.can_post === true,
+  }
+}
+
+/** Switches a ministry group between open discussion and announcements only. */
+export async function updateChatPostingMode(
+  conversationId: string,
+  postingMode: ChatPostingMode,
+): Promise<void> {
+  if (!isSupabaseConfigured) {
+    updateDemoPostingMode(conversationId, postingMode)
+    return
+  }
+
+  const { error } = await supabase.rpc("update_chat_group_settings", {
+    p_conversation_id: conversationId,
+    p_posting_mode: postingMode,
+  })
+  if (error) throw fromSupabase(error, "Unable to update the group settings.")
+}
+
+/** Mutes or unmutes one regular member in a ministry group. */
+export async function setChatMemberCanPost(
+  conversationId: string,
+  userId: string,
+  canPost: boolean,
+): Promise<void> {
+  if (!isSupabaseConfigured) {
+    setDemoCanPost(userId, canPost)
+    return
+  }
+
+  const { error } = await supabase.rpc("set_chat_member_can_post", {
+    p_conversation_id: conversationId,
+    p_user_id: userId,
+    p_can_post: canPost,
+  })
+  if (error) throw fromSupabase(error, "Unable to change this member's access.")
 }
 
 // ─── Messages ────────────────────────────────────────────────────────────────
