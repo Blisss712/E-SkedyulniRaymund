@@ -29,23 +29,6 @@ export function isPlaceholderName(name?: string | null): boolean {
   return !hasSpaceOrCaps
 }
 
-/** Input for turning a normal email/password member account into an administrator. */
-export type AdminPromotionInput = {
-  /** Administrator setup code stored in public.admin_settings. */
-  code: string
-  /** Optional admin username; defaults to the email local part. */
-  username?: string
-  /** Email/password of the member account when nobody is signed in yet. */
-  email?: string
-  password?: string
-}
-
-export type AdminPromotionResult = {
-  ok: boolean
-  error?: string
-  profile?: UserProfile
-}
-
 export type AuthContextType = {
   user: User | null
   session: Session | null
@@ -64,10 +47,7 @@ export type AuthContextType = {
     ok: boolean
     error?: string
     profile?: UserProfile
-    notAdmin?: boolean
-    email?: string
   }>
-  promoteToAdmin: (input: AdminPromotionInput) => Promise<AdminPromotionResult>
   signUpWithEmail: (
     email: string,
     password: string,

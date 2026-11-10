@@ -9,8 +9,6 @@ import type { Session, User } from "@supabase/supabase-js"
 import { supabase, isSupabaseConfigured } from "../../lib/supabase"
 import {
   isPlaceholderName,
-  type AdminPromotionInput,
-  type AdminPromotionResult,
   type SocialProvider,
   type AuthContextType,
   type UserProfile,
@@ -242,8 +240,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ok: boolean
     error?: string
     profile?: UserProfile
-    notAdmin?: boolean
-    email?: string
   }> {
     const cleanId = identifier.trim()
     if (!cleanId || !password) {
@@ -319,9 +315,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile(null)
         return {
           ok: false,
-          notAdmin: true,
-          email: data.user.email || emailToUse,
-          error: `${data.user.email || emailToUse} signed in, but it is not an administrator yet. Use “Activate administrator access” below with the setup code to promote it.`,
+          error: `${data.user.email || emailToUse} signed in, but it is not an administrator yet. An existing administrator must promote it by running the SQL in supabase/promote_to_admin.sql in the Supabase SQL editor.`,
         }
       }
 
@@ -333,95 +327,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           err instanceof Error
             ? err.message
             : "An unexpected error occurred during admin sign in.",
-      }
-    }
-  }
-
-  /**
-   * Promotes the signed-in account (or the account given by email/password) to an
-   * administrator. The database function requires the shared setup code from
-   * `public.admin_settings`, so the public anon key alone cannot grant admin.
-   */
-  async function promoteToAdmin(
-    input: AdminPromotionInput,
-  ): Promise<AdminPromotionResult> {
-    const code = input.code.trim()
-    if (!code) {
-      return { ok: false, error: "Enter the administrator setup code." }
-    }
-
-    if (!isSupabaseConfigured) {
-      return {
-        ok: false,
-        error: "Authentication is not configured. Add the Supabase environment variables.",
-      }
-    }
-
-    try {
-      let signedInUser = user
-
-      if (!signedInUser) {
-        const email = input.email?.trim() ?? ""
-        if (!email || !input.password) {
-          return {
-            ok: false,
-            error: "Enter the email and password of the member account to promote.",
-          }
-        }
-
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password: input.password,
-        })
-
-        if (error) {
-          return { ok: false, error: error.message }
-        }
-        if (!data.user) {
-          return { ok: false, error: "The member account could not be signed in." }
-        }
-        signedInUser = data.user
-      }
-
-      const { error } = await supabase.rpc("promote_current_user_to_admin", {
-        p_code: code,
-        p_username: input.username?.trim() || null,
-      })
-
-      if (error) {
-        const message = error.message || ""
-        return {
-          ok: false,
-          error: /could not find the function/i.test(message)
-            ? "Administrator activation is not installed yet. Run supabase/admin_setup.sql in the Supabase SQL editor, then try again."
-            : message ||
-              "Unable to activate administrator access. Run supabase/admin_setup.sql, then try again.",
-        }
-      }
-
-      const metaName = getProviderDisplayName(signedInUser)
-      const resolvedProfile = await fetchProfile(
-        signedInUser.id,
-        signedInUser.email || input.email || "",
-        metaName,
-      )
-
-      if (!resolvedProfile || resolvedProfile.role !== "admin") {
-        return {
-          ok: false,
-          error:
-            "The account was updated, but administrator access is still not active. Run supabase/admin_setup.sql in the Supabase SQL editor, then try again.",
-        }
-      }
-
-      return { ok: true, profile: resolvedProfile }
-    } catch (err: unknown) {
-      return {
-        ok: false,
-        error:
-          err instanceof Error
-            ? err.message
-            : "An unexpected error occurred while activating administrator access.",
       }
     }
   }
@@ -618,7 +523,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         needsName,
         signInWithEmail,
         signInAsAdmin,
-        promoteToAdmin,
         signUpWithEmail,
         signInWithProvider,
         signInWithPhone,
