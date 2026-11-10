@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react"
 import { BACK_TARGETS, type Screen } from "./navigation"
 import { useIsDesktop } from "./shared/ui"
 import { applyStatusBar, listenForBackButton } from "./shared/native"
-import { HomeScreen, MINISTRIES, type HomeTab } from "./shared/home"
+import { HomeScreen, type HomeTab, type Ministry } from "./shared/home"
 
 // Wizard
 import { WelcomeScreen, TellNameScreen, JoinGroupScreen, PendingScreen } from "./features/wizard/wizard"
@@ -19,6 +19,7 @@ import { useSlots } from "./features/slots/useSlots"
 import { AdminScreen } from "./features/admin/admin"
 import { AdminLoginScreen } from "./features/admin/login"
 import { useJoinRequests } from "./features/admin/useJoinRequests"
+import { useMyMinistries } from "./features/organizations/useMyMinistries"
 import { logoutAdmin } from "./features/admin/api"
 import { AuthScreen } from "./features/auth/AuthScreen"
 import { useAuth } from "./features/auth/AuthContext"
@@ -35,7 +36,14 @@ export default function App() {
   const [dashboardReturnScreen, setDashboardReturnScreen] = useState<"home" | "admin">("home")
 
   const [homeTab, setHomeTab] = useState<HomeTab>("availability")
-  const [ministry, setMinistry] = useState(MINISTRIES[0])
+  // The ministries belong to the signed-in member; the selection is just an id.
+  // A request that is still waiting for approval is never the current ministry.
+  const ministries = useMyMinistries()
+  const [ministryId, setMinistryId] = useState("")
+  const ministry: Ministry | null =
+    ministries.items.find(item => item.id === ministryId && !item.waiting) ??
+    ministries.items.find(item => !item.waiting) ??
+    null
 
   const wizard = useWizard()
   const availability = useAvailability()
@@ -43,9 +51,22 @@ export default function App() {
   const joinRequests = useJoinRequests()
   const [activeRequestId, setActiveRequestId] = useState("")
 
+  // Memberships and requests change while the member is away (an administrator
+  // may approve a request), so re-read them whenever the dashboard opens.
+  const refreshMinistriesRef = useRef(ministries.refresh)
+  refreshMinistriesRef.current = ministries.refresh
   useEffect(() => {
-    if (adminAuthenticated) void joinRequests.refresh()
-  }, [adminAuthenticated])
+    if (screen !== "home") return
+    void refreshMinistriesRef.current()
+  }, [screen])
+
+  // The review queue is shared with members, so re-read it on every visit.
+  const refreshJoinRequestsRef = useRef(joinRequests.refresh)
+  refreshJoinRequestsRef.current = joinRequests.refresh
+  useEffect(() => {
+    if (!adminAuthenticated || screen !== "admin") return
+    void refreshJoinRequestsRef.current()
+  }, [adminAuthenticated, screen])
 
   useEffect(() => {
     if (screen !== "pending" || !activeRequestId || activeRequestId.startsWith("request-")) return
@@ -62,7 +83,7 @@ export default function App() {
     wizard.reset()
     setActiveRequestId("")
     setHomeTab("availability")
-    setMinistry(MINISTRIES[0])
+    setMinistryId("")
     availability.resetPosition()
     go("welcome")
   }
@@ -125,8 +146,9 @@ export default function App() {
     return (
       <HomeScreen
         userName={wizard.form.name || profile?.fullName || "Maria Santos"}
+        ministries={ministries.items}
         ministry={ministry}
-        onMinistryChange={setMinistry}
+        onMinistryChange={next => setMinistryId(next.id)}
         tab={homeTab}
         onTabChange={setHomeTab}
         onJoin={() => go("join-group")}
@@ -269,13 +291,16 @@ export default function App() {
     case "join-group": {
       // Back returns to wherever the member came from: name entry during onboarding, or Home via "+ Join Another Ministry".
       const back = () => go(prevScreen)
-      const submitJoinRequest = async (group: { groupCode: string; groupName: string }) => {
+      const submitJoinRequest = async (group: { groupCode: string; groupName: string; organizationId?: string }) => {
         const requestId = await joinRequests.createRequest({
             memberName: wizard.form.name || profile?.fullName || "Member",
             groupCode: group.groupCode,
             groupName: group.groupName,
+            organizationId: group.organizationId,
         })
         setActiveRequestId(requestId)
+        // The request is now pending, so the dashboard's ministry list changes.
+        void ministries.refresh()
         go("pending")
       }
       return isDesktop ? (
