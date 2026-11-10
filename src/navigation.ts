@@ -16,6 +16,7 @@ import {
 export type Screen =
   | WizardScreen
   | "auth"
+  | "forgot-password"
   | "home"
   | "admin-login"
   | "coordinator-login"
@@ -27,6 +28,7 @@ export type Screen =
 export const BACK_TARGETS: Record<Screen, BackTarget<Screen>> = {
   ...WIZARD_BACK_TARGETS,
   auth: "welcome",
+  "forgot-password": "auth",
   home: "minimize",
   "admin-login": "welcome",
   "coordinator-login": "welcome",

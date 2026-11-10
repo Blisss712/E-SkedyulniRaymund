@@ -37,6 +37,15 @@ function describeAuthFailure(code: string, description: string): string {
   const haystack = `${code} ${detail}`.toLowerCase()
   const callback = oauthCallbackUrl()
 
+  // An expired or already-used password-recovery link also arrives as
+  // `error=access_denied`, which would otherwise be blamed on the provider.
+  if (
+    haystack.includes("otp_expired") ||
+    haystack.includes("email link is invalid or has expired")
+  ) {
+    return "That password link is invalid or has expired. Request a new one from \"Forgot password?\"; open it on this device."
+  }
+
   // Meta answers a missing or unapproved permission with "Permissions error".
   if (haystack.includes("permission")) {
     return `Facebook refused the sign-in ("${detail || "Permissions error"}"). The Facebook app is most likely still in Development mode, or it is not allowed to read this account's email address. Add the account as a Tester/Administrator in the Meta app dashboard (or switch the app to Live), keep the email permission, and set the Valid OAuth Redirect URI to ${callback}.`
@@ -131,4 +140,49 @@ export function clearAuthRedirectFailure(): void {
     "",
     `${url.pathname}${url.search}${url.hash}`,
   )
+}
+
+const WORKSPACE_INTENT_KEY = "eskedyul.auth.workspace-intent"
+/** An abandoned Google round trip should not affect a later sign-in. */
+const WORKSPACE_INTENT_TTL_MS = 10 * 60 * 1000
+
+export type WorkspaceIntent = "coordinator"
+
+/**
+ * Remembers which workspace the member chose before leaving for Google/Facebook.
+ * The OAuth round trip reloads the page, so in-memory state is gone by the time
+ * the session comes back.
+ */
+export function rememberWorkspaceIntent(intent: WorkspaceIntent): void {
+  if (typeof window === "undefined") return
+  try {
+    window.sessionStorage.setItem(
+      WORKSPACE_INTENT_KEY,
+      JSON.stringify({ intent, at: Date.now() }),
+    )
+  } catch {
+    // Storage can be blocked in private mode; sign-in still works, it just
+    // lands on the member dashboard instead of the coordinator workspace.
+  }
+}
+
+/** Reads and clears the pending workspace intent; stale intents are ignored. */
+export function takeWorkspaceIntent(): WorkspaceIntent | null {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = window.sessionStorage.getItem(WORKSPACE_INTENT_KEY)
+    window.sessionStorage.removeItem(WORKSPACE_INTENT_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { intent?: string; at?: number }
+    if (parsed.intent !== "coordinator") return null
+    if (
+      typeof parsed.at !== "number" ||
+      Date.now() - parsed.at > WORKSPACE_INTENT_TTL_MS
+    ) {
+      return null
+    }
+    return "coordinator"
+  } catch {
+    return null
+  }
 }

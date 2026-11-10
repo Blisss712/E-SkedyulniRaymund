@@ -6,11 +6,17 @@ import {
   type ReactNode,
 } from "react"
 import type { Session, User } from "@supabase/supabase-js"
-import { supabase, isSupabaseConfigured } from "../../lib/supabase"
+import {
+  supabase,
+  isSupabaseConfigured,
+  openedFromPasswordRecoveryLink,
+} from "../../lib/supabase"
 import {
   isPlaceholderName,
   type SocialProvider,
   type AuthContextType,
+  type AuthErrorCode,
+  type AuthResult,
   type UserProfile,
 } from "./types"
 import { fetchMyLeaderships, type LeaderMinistry } from "../organizations/leaders"
@@ -111,11 +117,110 @@ function normalizePhone(phone: string): string {
   return withPlus
 }
 
+/**
+ * Maps a Supabase Auth error to a reason the screens can act on.
+ *
+ * Supabase reports a Google/Facebook-only account and a wrong password with the
+ * same "Invalid login credentials" message; both mean the password check failed.
+ */
+function classifyAuthError(error: {
+  message?: string
+  code?: string
+}): AuthErrorCode {
+  const code = (error.code ?? "").toLowerCase()
+  const message = (error.message ?? "").toLowerCase()
+
+  if (
+    code.includes("invalid_credentials") ||
+    message.includes("invalid login credentials")
+  ) {
+    return "invalid_credentials"
+  }
+  if (
+    code.includes("email_not_confirmed") ||
+    message.includes("email not confirmed")
+  ) {
+    return "email_not_confirmed"
+  }
+  if (
+    code.includes("user_already_exists") ||
+    code.includes("email_exists") ||
+    message.includes("already registered")
+  ) {
+    return "account_exists"
+  }
+  if (
+    code.includes("rate_limit") ||
+    message.includes("rate limit") ||
+    message.includes("too many")
+  ) {
+    return "rate_limited"
+  }
+  if (code.includes("weak_password")) return "weak_password"
+  return "unknown"
+}
+
+/** The sign-in failure shown on a form, with the way out of the Google trap. */
+function describeSignInFailure(
+  error: { message?: string; code?: string },
+  surface: "member" | "admin" | "coordinator",
+): string {
+  const kind = classifyAuthError(error)
+
+  if (kind === "invalid_credentials") {
+    if (surface === "admin") {
+      return "That email/username and password don't match an administrator account."
+    }
+    const wayOut =
+      surface === "coordinator"
+        ? "set a password for it below"
+        : "use \"Forgot password?\" to set one"
+    return `That email and password don't match an account. If you created this account with Google or Facebook, it has no password yet — continue with that button, or ${wayOut}.`
+  }
+
+  if (kind === "email_not_confirmed") {
+    return "Confirm your email address first: open the confirmation link Supabase emailed you, then sign in."
+  }
+
+  if (kind === "rate_limited") {
+    return "Too many attempts. Wait a minute, then try again."
+  }
+
+  return error.message?.trim() || "Unable to sign in. Please try again."
+}
+
+/** The sign-up failure shown on the Create Account form. */
+function describeSignUpFailure(error: {
+  message?: string
+  code?: string
+}): string {
+  const kind = classifyAuthError(error)
+  if (kind === "account_exists") {
+    return "An account with this email already exists. If you created it with Google or Facebook, continue with that button; to use email and password, set a password first."
+  }
+  if (kind === "rate_limited") {
+    return "Too many attempts. Wait a minute, then try again."
+  }
+  if (kind === "weak_password") {
+    return "That password is too weak. Use at least 6 characters and avoid a password you have used here before."
+  }
+  return error.message?.trim() || "Unable to register. Please check your details."
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [loading, setLoading] = useState(true)
+  /**
+   * True during the one-time session a password-recovery email link creates.
+   * While it is set, the app shows "choose a new password" instead of treating
+   * the member as signed in. This is what lets a Google/Facebook account add a
+   * password for the email sign-in form.
+   */
+  const [passwordRecovery, setPasswordRecovery] = useState(
+    openedFromPasswordRecoveryLink,
+  )
 
   /**
    * Guarantees the signed-in user has a `member_profiles` row.
@@ -309,7 +414,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Listen for auth state changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+    } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true)
       setSession(newSession)
       setUser(newSession?.user ?? null)
       if (newSession?.user) {
@@ -328,10 +434,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function signInWithEmail(
     email: string,
     password: string,
-  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<AuthResult> {
     if (!isSupabaseConfigured) {
       return {
         ok: false,
+        code: "unavailable",
         error: "Authentication is not configured. Add the Supabase environment variables.",
       }
     }
@@ -343,7 +450,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
 
       if (error) {
-        return { ok: false, error: error.message }
+        return {
+          ok: false,
+          code: classifyAuthError(error),
+          error: describeSignInFailure(error, "member"),
+        }
       }
 
       let userProfile: UserProfile | null = null
@@ -374,7 +485,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     identifier: string,
     password: string,
     expected: "admin" | "leader",
-  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<AuthResult> {
     const isAdminForm = expected === "admin"
     const cleanId = identifier.trim()
 
@@ -436,7 +547,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
 
       if (error) {
-        return { ok: false, error: error.message }
+        return {
+          ok: false,
+          code: classifyAuthError(error),
+          error: describeSignInFailure(
+            error,
+            isAdminForm ? "admin" : "coordinator",
+          ),
+        }
       }
 
       if (!data.user) {
@@ -493,7 +611,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function signInAsAdmin(
     identifier: string,
     password: string,
-  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<AuthResult> {
     return signInToWorkspace(identifier, password, "admin")
   }
 
@@ -501,7 +619,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function signInAsCoordinator(
     identifier: string,
     password: string,
-  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<AuthResult> {
     return signInToWorkspace(identifier, password, "leader")
   }
 
@@ -509,10 +627,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     email: string,
     password: string,
     fullName: string,
-  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<AuthResult> {
     if (!isSupabaseConfigured) {
       return {
         ok: false,
+        code: "unavailable",
         error: "Authentication is not configured. Add the Supabase environment variables.",
       }
     }
@@ -529,7 +648,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
 
       if (error) {
-        return { ok: false, error: error.message }
+        return {
+          ok: false,
+          code: classifyAuthError(error),
+          error: describeSignUpFailure(error),
+        }
+      }
+
+      // When the email already belongs to an account, Supabase deliberately
+      // answers with an obfuscated user that has no identities instead of an
+      // error. Without this check the form used to claim "Account created!" for
+      // an existing — often Google-created — account that got no password.
+      if (data.user && (data.user.identities?.length ?? 0) === 0) {
+        return {
+          ok: false,
+          code: "account_exists",
+          error:
+            "This email cannot be registered again. If it already has an account — for example, one created with Google or Facebook — sign in with that button, or use \"Forgot password?\" to add a password for email sign-in.",
+        }
       }
 
       // If Supabase has email confirmation enabled, data.session may be null until confirmed
@@ -668,6 +804,125 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   /**
+   * Emails a password-recovery link.
+   *
+   * This is also the supported way for a Google/Facebook account to gain a
+   * password: those accounts are created without one, so the email/password form
+   * can never verify them until a password is set. The same account is kept —
+   * same ministries, requests, and profile — because the link signs the member
+   * into it before the new password is saved.
+   */
+  async function sendPasswordReset(email: string): Promise<AuthResult> {
+    if (!isSupabaseConfigured) {
+      return {
+        ok: false,
+        code: "unavailable",
+        error:
+          "Password email is not configured. Add the Supabase environment variables.",
+      }
+    }
+
+    const cleanEmail = email.trim().toLowerCase()
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      return {
+        ok: false,
+        error: "Enter the email address on your account.",
+      }
+    }
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+        // The link comes back to the app, where PasswordResetScreen asks for the
+        // new password. `type=recovery` in the fragment survives the redirect.
+        redirectTo: window.location.origin,
+      })
+
+      if (error) {
+        const code = classifyAuthError(error)
+        return {
+          ok: false,
+          code,
+          error:
+            code === "rate_limited"
+              ? "Too many password emails were requested. Wait a few minutes, then try again."
+              : error.message?.trim() ||
+                "Unable to send the password email. Please try again.",
+        }
+      }
+
+      return { ok: true }
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        error:
+          err instanceof Error ? err.message : "An unexpected error occurred.",
+      }
+    }
+  }
+
+  /** Saves the new password for the account opened by the recovery link. */
+  async function updatePassword(password: string): Promise<AuthResult> {
+    if (!isSupabaseConfigured) {
+      return {
+        ok: false,
+        code: "unavailable",
+        error:
+          "Password setup is not configured. Add the Supabase environment variables.",
+      }
+    }
+
+    if (password.length < 6) {
+      return {
+        ok: false,
+        code: "weak_password",
+        error: "Use at least 6 characters.",
+      }
+    }
+
+    if (!user) {
+      return {
+        ok: false,
+        code: "recovery_link_invalid",
+        error:
+          "Open the link from the password email on this device, then choose the new password.",
+      }
+    }
+
+    try {
+      const { error } = await supabase.auth.updateUser({ password })
+
+      if (error) {
+        if (/different from the old/i.test(error.message)) {
+          return {
+            ok: false,
+            code: "weak_password",
+            error: "That is your current password. Choose a new one.",
+          }
+        }
+        return {
+          ok: false,
+          code: classifyAuthError(error),
+          error:
+            error.message?.trim() ||
+            "Unable to save the new password. Please try again.",
+        }
+      }
+
+      setPasswordRecovery(false)
+      // Re-read the profile so the name and coordinator role are unchanged now
+      // that the session is a normal one.
+      void fetchProfile(user)
+      return { ok: true }
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        error:
+          err instanceof Error ? err.message : "An unexpected error occurred.",
+      }
+    }
+  }
+
+  /**
    * Finishes the account setup wizard for the signed-in member: it stores the
    * name that was confirmed and records that onboarding is done, so the next
    * sign-in â€” including one that returns from Google or Facebook â€” opens the
@@ -737,6 +992,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
     setSession(null)
     setProfile(null)
+    setPasswordRecovery(false)
   }
 
   /**
@@ -767,6 +1023,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLeader,
         loading,
         needsName,
+        passwordRecovery,
         refreshProfile,
         signInWithEmail,
         signInAsAdmin,
@@ -775,6 +1032,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInWithProvider,
         signInWithPhone,
         verifyPhoneOtp,
+        sendPasswordReset,
+        updatePassword,
         completeOnboarding,
         signOut,
       }}

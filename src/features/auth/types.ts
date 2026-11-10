@@ -25,6 +25,31 @@ export type UserProfile = {
 export type SocialProvider = "google" | "facebook" | "apple"
 
 /**
+ * Why an auth call failed, so the screen can offer the right next step instead
+ * of a bare "Invalid login credentials".
+ *
+ * `invalid_credentials` also covers a Google/Facebook sign-up: Supabase creates
+ * those accounts without a password, so the email/password check has nothing to
+ * compare against until one is set through the recovery link.
+ */
+export type AuthErrorCode =
+  | "invalid_credentials"
+  | "email_not_confirmed"
+  | "account_exists"
+  | "rate_limited"
+  | "weak_password"
+  | "recovery_link_invalid"
+  | "unavailable"
+  | "unknown"
+
+export type AuthResult = {
+  ok: boolean
+  error?: string
+  code?: AuthErrorCode
+  profile?: UserProfile
+}
+
+/**
  * Heuristic used to detect whether a signed-in user still lacks a real name
  * (e.g. a first-time Google/Facebook/phone user whose profile only holds an
  * email address or phone-number fallback).
@@ -52,32 +77,26 @@ export type AuthContextType = {
   needsName: boolean
   /** Re-reads the profile (and coordinator appointments) from the database. */
   refreshProfile: () => Promise<UserProfile | null>
+  /** True while the session came from a "set/reset password" email link. */
+  passwordRecovery: boolean
   signInWithEmail: (
     email: string,
     password: string,
-  ) => Promise<{ ok: boolean; error?: string; profile?: UserProfile }>
+  ) => Promise<AuthResult>
   signInAsAdmin: (
     identifier: string,
     password: string,
-  ) => Promise<{
-    ok: boolean
-    error?: string
-    profile?: UserProfile
-  }>
+  ) => Promise<AuthResult>
   /** The separate leader/coordinator form; only appointed coordinators pass. */
   signInAsCoordinator: (
     email: string,
     password: string,
-  ) => Promise<{
-    ok: boolean
-    error?: string
-    profile?: UserProfile
-  }>
+  ) => Promise<AuthResult>
   signUpWithEmail: (
     email: string,
     password: string,
     fullName: string,
-  ) => Promise<{ ok: boolean; error?: string; profile?: UserProfile }>
+  ) => Promise<AuthResult>
   signInWithProvider: (
     provider: SocialProvider,
   ) => Promise<{ ok: boolean; error?: string }>
@@ -88,6 +107,13 @@ export type AuthContextType = {
     phone: string,
     token: string,
   ) => Promise<{ ok: boolean; error?: string; profile?: UserProfile }>
+  /**
+   * Emails a recovery link. For a Google/Facebook account this is also how the
+   * account gains a password, so it can sign in with email afterwards.
+   */
+  sendPasswordReset: (email: string) => Promise<AuthResult>
+  /** Saves the new password for the signed-in recovery session. */
+  updatePassword: (password: string) => Promise<AuthResult>
   /** Saves the confirmed name and marks the account setup wizard as finished. */
   completeOnboarding: (fullName: string) => Promise<void>
   signOut: () => Promise<void>

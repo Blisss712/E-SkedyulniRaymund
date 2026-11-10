@@ -1,8 +1,10 @@
 import { useState } from "react"
 import { BackButton, Button, Card, InputField, Logo, ScreenShell } from "../../shared/ui"
 import { useAuth } from "../auth/AuthContext"
-import type { UserProfile } from "../auth/types"
+import type { AuthErrorCode, UserProfile } from "../auth/types"
 import { isSupabaseConfigured } from "../../lib/supabase"
+import { GoogleIcon } from "../auth/providerIcons"
+import { rememberWorkspaceIntent } from "../auth/redirect"
 
 /**
  * The leader/coordinator sign-in screen.
@@ -10,26 +12,35 @@ import { isSupabaseConfigured } from "../../lib/supabase"
  * It is deliberately separate from the administrator sign-in: an account only
  * gets in here when an administrator has appointed it to coordinate at least one
  * ministry (see supabase/organization_leaders.sql). The account is an ordinary
- * member account, so it uses the member's email and password.
+ * member account, so it signs in with the member's Google/Facebook account or
+ * the email and password set on it.
  */
-export function CoordinatorLoginScreen({ onBack, onAuthenticated, onAdmin }: {
+export function CoordinatorLoginScreen({ onBack, onAuthenticated, onAdmin, onForgotPassword }: {
   onBack: () => void
   onAuthenticated: (profile?: UserProfile) => void
   /** Opens the separate administrator sign-in screen. */
   onAdmin?: () => void
+  /**
+   * Opens the set/reset password screen. Google/Facebook accounts have no
+   * password until one is set, so the email form cannot accept them before that.
+   */
+  onForgotPassword?: (email: string) => void
 }) {
-  const { signInAsCoordinator } = useAuth()
+  const { signInAsCoordinator, signInWithProvider } = useAuth()
 
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
+  const [errorCode, setErrorCode] = useState<AuthErrorCode | "">("")
   const [loading, setLoading] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
 
   const accountsAvailable = isSupabaseConfigured
 
   async function signIn(event?: React.FormEvent) {
     event?.preventDefault()
     setError("")
+    setErrorCode("")
 
     const cleanEmail = email.trim()
     if (!cleanEmail || !password) {
@@ -46,11 +57,28 @@ export function CoordinatorLoginScreen({ onBack, onAuthenticated, onAdmin }: {
       const result = await signInAsCoordinator(cleanEmail, password)
       if (!result.ok) {
         setError(result.error || "The email or password is incorrect.")
+        setErrorCode(result.code ?? "")
         return
       }
       onAuthenticated(result.profile)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function continueWithGoogle() {
+    setError("")
+    setErrorCode("")
+    setGoogleLoading(true)
+    // Remember the workspace choice across the OAuth reload so a coordinator
+    // lands back in the coordinator workspace, not on the member dashboard.
+    rememberWorkspaceIntent("coordinator")
+    const result = await signInWithProvider("google")
+    if (!result.ok) {
+      setGoogleLoading(false)
+      setError(
+        result.error || "Unable to open Google sign-in. Please try again.",
+      )
     }
   }
 
@@ -82,7 +110,32 @@ export function CoordinatorLoginScreen({ onBack, onAuthenticated, onAdmin }: {
           </div>
         )}
 
-        <form onSubmit={signIn} className="mt-6 flex flex-col gap-5">
+        <div className="mt-6 flex flex-col gap-3">
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={!accountsAvailable || googleLoading || loading}
+            onClick={() => void continueWithGoogle()}
+          >
+            <GoogleIcon />
+            {googleLoading ? "Opening Google..." : "Continue with Google"}
+          </Button>
+          <p className="text-xs leading-relaxed text-[#64748B]">
+            Appointed with a Google account? Use this button. Google and
+            Facebook accounts have no password until you set one — the email form
+            below can then be used too.
+          </p>
+        </div>
+
+        <div className="my-5 flex items-center gap-3">
+          <div className="h-px flex-1 bg-[#D1D9E8]" />
+          <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">
+            or use email and password
+          </span>
+          <div className="h-px flex-1 bg-[#D1D9E8]" />
+        </div>
+
+        <form onSubmit={signIn} className="flex flex-col gap-5">
           <InputField
             id="coordinator-email"
             label="Coordinator email"
@@ -91,6 +144,7 @@ export function CoordinatorLoginScreen({ onBack, onAuthenticated, onAdmin }: {
             onChange={value => {
               setEmail(value)
               setError("")
+              setErrorCode("")
             }}
             placeholder="you@example.com"
             autoComplete="username"
@@ -104,18 +158,31 @@ export function CoordinatorLoginScreen({ onBack, onAuthenticated, onAdmin }: {
             onChange={value => {
               setPassword(value)
               setError("")
+              setErrorCode("")
             }}
             placeholder="Enter password"
             autoComplete="current-password"
           />
 
           {error && (
-            <p role="alert" className="rounded-xl bg-red-light p-4 text-sm font-semibold text-red">
-              {error}
-            </p>
+            <div
+              role="alert"
+              className="rounded-xl bg-red-light p-4 text-sm font-semibold text-red"
+            >
+              <p>{error}</p>
+              {errorCode === "invalid_credentials" && onForgotPassword && (
+                <button
+                  type="button"
+                  onClick={() => onForgotPassword(email)}
+                  className="mt-2 font-bold underline cursor-pointer"
+                >
+                  Set or reset the password for this account →
+                </button>
+              )}
+            </div>
           )}
 
-          <Button type="submit" disabled={loading || !accountsAvailable}>
+          <Button type="submit" disabled={loading || googleLoading || !accountsAvailable}>
             {loading ? "Signing in..." : "Sign in as coordinator"}
           </Button>
         </form>

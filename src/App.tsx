@@ -25,16 +25,26 @@ import { useJoinRequests } from "./features/admin/useJoinRequests"
 import { useMyMinistries } from "./features/organizations/useMyMinistries"
 import { logoutAdmin, getAdminToken } from "./features/admin/api"
 import { AuthScreen } from "./features/auth/AuthScreen"
+import { PasswordResetScreen } from "./features/auth/PasswordResetScreen"
 import { useAuth } from "./features/auth/AuthContext"
 import { isPlaceholderName } from "./features/auth/types"
 import {
   authRedirectFailureFromLocation,
   clearAuthRedirectFailure,
+  takeWorkspaceIntent,
 } from "./features/auth/redirect"
 import { isSupabaseConfigured } from "./lib/supabase"
 
 export default function App() {
-  const { user, profile, loading, signOut, completeOnboarding, refreshProfile } = useAuth()
+  const {
+    user,
+    profile,
+    loading,
+    passwordRecovery,
+    signOut,
+    completeOnboarding,
+    refreshProfile,
+  } = useAuth()
   const isDesktop = useIsDesktop()
   const [screen, setScreen] = useState<Screen>("welcome")
   const [prevScreen, setPrevScreen] = useState<Screen>("welcome")
@@ -42,6 +52,8 @@ export default function App() {
   // Why the last Google/Facebook attempt failed, when the provider sent the
   // browser back with an error instead of a session.
   const [authNotice, setAuthNotice] = useState("")
+  /** Prefills the password screen when "Forgot password?" is clicked. */
+  const [resetEmail, setResetEmail] = useState("")
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [dashboardReturnScreen, setDashboardReturnScreen] = useState<"home" | "admin">("home")
 
@@ -150,6 +162,33 @@ export default function App() {
     go("auth")
   }
 
+  /** Opens the set/reset password screen, keeping the email the member typed. */
+  function startPasswordReset(email = "") {
+    setResetEmail(email)
+    go("forgot-password")
+  }
+
+  /**
+   * Leaves the password screen after a successful save. The recovery link has
+   * signed the member in, so continue the same way a normal sign-in would.
+   */
+  async function finishPasswordReset() {
+    setResetEmail("")
+    // The profile load can still be in flight when the password is saved.
+    const current = profile ?? (await refreshProfile())
+    if (current?.role === "admin") {
+      setAdminAuthenticated(true)
+      go("admin")
+      return
+    }
+    if (!current?.onboarded) {
+      prefillName(current?.fullName)
+      go("tell-name")
+      return
+    }
+    go("home")
+  }
+
   /** Copies the signed-in account name into the onboarding form when it is still empty. */
   function prefillName(fullName?: string) {
     if (!fullName || isPlaceholderName(fullName)) return
@@ -175,11 +214,18 @@ export default function App() {
   isCoordinatorRef.current = isCoordinator
   const goRef = useRef(go)
   goRef.current = go
+  const signOutRef = useRef(signOut)
+  signOutRef.current = signOut
   useEffect(() => listenForBackButton(BACK_TARGETS, () => screenRef.current, () => prevScreenRef.current, to => {
     const current = screenRef.current
     if (current === "set-recurring" || current === "add-override" || current.startsWith("slot-")) {
       goRef.current(dashboardReturnScreenRef.current)
       return
+    }
+    // Leaving the password screen abandons the recovery session rather than
+    // silently signing the member in.
+    if (current === "forgot-password") {
+      void signOutRef.current()
     }
     // A coordinator's workspace is entered from their member dashboard, not
     // from the administrator sign-in screen.
@@ -190,14 +236,38 @@ export default function App() {
     goRef.current(to)
   }), [])
 
+  // A password-recovery link opens the app with a session but is not a normal
+  // sign-in: ask for the new password before showing any dashboard.
+  useEffect(() => {
+    if (!loading && passwordRecovery) {
+      setScreen("forgot-password")
+    }
+  }, [loading, passwordRecovery])
+
   // Resume an existing session (the Supabase session now survives a page reload).
   // This runs at most once, and only while the welcome screen is still showing.
   const resumedSessionRef = useRef(false)
   useEffect(() => {
     if (resumedSessionRef.current || loading || !user || !profile) return
+    // The recovery screen owns this session until the new password is saved.
+    if (passwordRecovery) return
     resumedSessionRef.current = true
     if (screenRef.current !== "welcome") return
     prefillName(profile.fullName)
+
+    // Google/Facebook sign-in from the coordinator screen comes back to a
+    // reloaded page. The intent recorded before leaving decides where it lands.
+    const intent = takeWorkspaceIntent()
+    if (
+      intent === "coordinator" &&
+      profile.onboarded &&
+      (profile.role === "leader" || profile.role === "admin")
+    ) {
+      setAdminAuthenticated(true)
+      setScreen("admin")
+      return
+    }
+
     if (profile.role === "admin") {
       setAdminAuthenticated(true)
       setScreen("admin")
@@ -210,7 +280,7 @@ export default function App() {
       return
     }
     setScreen("home")
-  }, [loading, user, profile])
+  }, [loading, user, profile, passwordRecovery])
 
   /**
    * A refused Google/Facebook login comes back as `?error=access_denied...` in
@@ -320,6 +390,10 @@ export default function App() {
             setAuthNotice("")
             go("coordinator-login")
           }}
+          onForgotPassword={email => {
+            setAuthNotice("")
+            startPasswordReset(email)
+          }}
           onSkip={() => go("tell-name")}
           onSuccess={(signedInProfile, mode) => {
             setAuthNotice("")
@@ -340,6 +414,22 @@ export default function App() {
         />
       )
 
+    case "forgot-password":
+      return (
+        <PasswordResetScreen
+          mode={passwordRecovery ? "update" : "request"}
+          initialEmail={resetEmail}
+          onBack={() => {
+            setResetEmail("")
+            // The recovery link created a session; leaving without saving a
+            // password should not silently sign the member in.
+            if (passwordRecovery) void signOut()
+            go("auth")
+          }}
+          onDone={finishPasswordReset}
+        />
+      )
+
     case "admin-login":
       return (
         <AdminLoginScreen
@@ -355,6 +445,7 @@ export default function App() {
           onBack={() => go("welcome")}
           onAuthenticated={() => enterWorkspace()}
           onAdmin={() => go("admin-login")}
+          onForgotPassword={email => startPasswordReset(email)}
         />
       )
 
@@ -396,6 +487,7 @@ export default function App() {
           onBack={() => go("welcome")}
           onAuthenticated={() => enterWorkspace()}
           onAdmin={() => go("admin-login")}
+          onForgotPassword={email => startPasswordReset(email)}
         />
       ) : (
         <AdminLoginScreen

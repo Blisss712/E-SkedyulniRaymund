@@ -80,6 +80,41 @@ reason instead of silently showing the welcome screen again:
 | "The provider rejected the callback URL" | The redirect URLs above do not match exactly — check `http` vs `https`, the port, and trailing slashes. |
 | "That sign-in link was stale" (`bad_oauth_state`) | The tab was left open too long. Start the sign-in again from the app. |
 
+### Google/Facebook accounts have no password
+
+Supabase creates an OAuth account **without a password**. That is why the email
+and password form answers "Invalid login credentials" for an account that was
+made with **Continue with Google**, even when the email address is exactly right:
+there is nothing on the account to compare the typed password with. This is not a
+duplicate account or a missing `member_profiles` row.
+
+The app now handles this in three ways:
+
+- The member sign-in screen and the Leader/Coordinator sign-in screen explain it
+  in the error and offer **Set a password for this account**.
+- **Forgot password?** emails a link that opens the app on a "Choose a new
+  password" screen. The link signs into the **existing** account, so the saved
+  password is added to the same user — same ministries, join requests, profile,
+  and schedule. Afterwards either Google/Facebook or email + password works.
+- The Leader/Coordinator screen also has **Continue with Google**, so an
+  appointed coordinator who signed up with Google does not need a password at
+  all. The app remembers that the Google round trip started there and opens the
+  coordinator workspace instead of the member dashboard.
+
+For the emailed link to come back to the app:
+
+1. **Supabase → Authentication → URL Configuration → Redirect URLs** must contain
+   the app URL you actually use, e.g. `http://localhost:8443` (plus your deployed
+   URL). The app sends `window.location.origin` as the redirect.
+2. Keep the **Reset password** email template (or make sure a custom template
+   still links to `{{ .ConfirmationURL }}`).
+3. Email delivery must work. Supabase's built-in sender is fine for development
+   but heavily rate-limited; configure custom SMTP under **Authentication →
+   Emails** before relying on it in production.
+
+The same screen is the normal "I forgot my password" flow. It never creates a
+second account, and it does not touch the Google/Facebook identity.
+
 ### Existing projects: member profile repair
 
 Availability, slot sign-ups, and join requests reference `member_profiles(user_id)`. The
@@ -355,9 +390,10 @@ is signed out again and told which form to use.
 
 - Click **Leader / Coordinator sign in** on the welcome screen (also linked from the member
   sign-in screen).
-- Sign in with the **email and password of the member account** an administrator appointed
-  as a coordinator (see section 2.4). There is no username form and no offline demo
-  coordinator account.
+- Sign in with **Continue with Google** when the member account was created that way, or with
+  the **email and password** on the account. An account made with Google/Facebook has no
+  password until one is set through **Forgot password?** (see "Google/Facebook accounts have
+  no password"). There is no username form and no offline demo coordinator account.
 - Only appointed coordinators pass. An administrator account is rejected with a pointer to
   the admin form, and an ordinary member is told to ask an administrator for an appointment.
 - A coordinator can still use the normal member **Sign in**: that opens their member

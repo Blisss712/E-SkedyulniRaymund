@@ -8,45 +8,12 @@ import {
   ScreenShell,
 } from "../../shared/ui"
 import { useAuth } from "./AuthContext"
-import { type SocialProvider, type UserProfile } from "./types"
+import { type SocialProvider, type AuthErrorCode, type UserProfile } from "./types"
 import { isSupabaseConfigured } from "../../lib/supabase"
+import { FacebookIcon, GoogleIcon } from "./providerIcons"
 
 type AuthTab = "signin" | "signup"
 type PhoneStep = "email" | "phone" | "code"
-
-function GoogleIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
-      <path
-        fill="#EA4335"
-        d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
-      />
-      <path
-        fill="#4285F4"
-        d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
-      />
-      <path
-        fill="#FBBC05"
-        d="M10.53 28.59A14.5 14.5 0 0 1 9.77 24c0-1.6.27-3.14.76-4.59l-7.98-6.19A23.94 23.94 0 0 0 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
-      />
-      <path
-        fill="#34A853"
-        d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
-      />
-    </svg>
-  )
-}
-
-function FacebookIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fill="#1877F2"
-        d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.09 10.13 24v-8.44H7.08v-3.49h3.04V9.41c0-3.02 1.8-4.7 4.54-4.7 1.31 0 2.68.24 2.68.24v2.97h-1.52c-1.49 0-1.96.93-1.96 1.89v2.26h3.32l-.53 3.49h-2.79V24C19.62 23.09 24 18.1 24 12.07z"
-      />
-    </svg>
-  )
-}
 
 function PhoneIcon() {
   return (
@@ -99,6 +66,7 @@ export function AuthScreen({
   onBack,
   onAdmin,
   onCoordinator,
+  onForgotPassword,
   onSkip,
   defaultTab = "signin",
   notice = "",
@@ -111,6 +79,11 @@ export function AuthScreen({
   onAdmin?: () => void
   /** Opens the separate leader/coordinator sign-in screen. */
   onCoordinator?: () => void
+  /**
+   * Opens the set/reset password screen with the typed email. This is the way
+   * a Google/Facebook account adds a password for email sign-in.
+   */
+  onForgotPassword?: (email: string) => void
   onSkip?: () => void
   defaultTab?: AuthTab
   /** Why the last Google/Facebook redirect failed, shown as soon as this screen opens. */
@@ -131,6 +104,7 @@ export function AuthScreen({
 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(notice)
+  const [errorCode, setErrorCode] = useState<AuthErrorCode | "">("")
   const [infoMessage, setInfoMessage] = useState("")
 
   const [socialLoading, setSocialLoading] = useState<string | null>(null)
@@ -144,6 +118,7 @@ export function AuthScreen({
   async function handleSubmit(e?: React.FormEvent) {
     if (e) e.preventDefault()
     setError("")
+    setErrorCode("")
     setInfoMessage("")
 
     if (phoneStep === "code") {
@@ -175,6 +150,7 @@ export function AuthScreen({
         setError(
           res.error || "Unable to sign in. Please verify your credentials.",
         )
+        setErrorCode(res.code ?? "")
       } else {
         onSuccess(res.profile, "signin")
       }
@@ -183,6 +159,7 @@ export function AuthScreen({
       setLoading(false)
       if (!res.ok) {
         setError(res.error || "Unable to register. Please check your details.")
+        setErrorCode(res.code ?? "")
       } else if (res.error) {
         // Confirmation notice message
         setInfoMessage(res.error)
@@ -194,6 +171,7 @@ export function AuthScreen({
 
   async function handleSocial(provider: SocialProvider) {
     setError("")
+    setErrorCode("")
     setInfoMessage("")
     setSocialLoading(provider)
     const res = await signInWithProvider(provider)
@@ -242,6 +220,7 @@ export function AuthScreen({
   function switchTab(next: AuthTab) {
     setTab(next)
     setError("")
+    setErrorCode("")
     setInfoMessage("")
     setPhoneStep("email")
     setPhoneError("")
@@ -339,6 +318,14 @@ export function AuthScreen({
                 <PhoneIcon />
                 Continue with Phone
               </Button>
+
+              {tab === "signin" && (
+                <p className="text-xs leading-relaxed text-[#64748B]">
+                  Created your account with Google or Facebook? Use that same
+                  button. Those accounts have no password until you set one with
+                  "Forgot password?".
+                </p>
+              )}
             </div>
 
             <div className="mb-5 flex items-center gap-3">
@@ -358,6 +345,7 @@ export function AuthScreen({
                   onChange={(val) => {
                     setFullName(val)
                     setError("")
+                    setErrorCode("")
                   }}
                   placeholder="Maria Santos"
                   autoComplete="name"
@@ -372,6 +360,7 @@ export function AuthScreen({
                 onChange={(val) => {
                   setEmail(val)
                   setError("")
+                  setErrorCode("")
                 }}
                 placeholder="you@example.com"
                 autoComplete="email"
@@ -385,6 +374,7 @@ export function AuthScreen({
                 onChange={(val) => {
                   setPassword(val)
                   setError("")
+                  setErrorCode("")
                 }}
                 placeholder="••••••••"
                 autoComplete={
@@ -393,12 +383,55 @@ export function AuthScreen({
                 helper={tab === "signup" ? "Must be at least 6 characters" : undefined}
               />
 
+              {tab === "signin" && onForgotPassword && (
+                <div className="-mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => onForgotPassword(email)}
+                    className="text-sm font-bold text-[#1B3A6B] hover:underline cursor-pointer"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              )}
+
               {error && (
                 <div
                   role="alert"
                   className="rounded-xl bg-[#FDEDEC] p-3 text-sm font-medium text-[#C0392B] border border-[#FADBD8]"
                 >
-                  {error}
+                  <p>{error}</p>
+                  {tab === "signin" &&
+                    errorCode === "invalid_credentials" &&
+                    onForgotPassword && (
+                      <button
+                        type="button"
+                        onClick={() => onForgotPassword(email)}
+                        className="mt-2 font-bold underline cursor-pointer"
+                      >
+                        Set a password for this account →
+                      </button>
+                    )}
+                  {tab === "signup" && errorCode === "account_exists" && (
+                    <div className="mt-2 flex flex-col items-start gap-1">
+                      <button
+                        type="button"
+                        onClick={() => switchTab("signin")}
+                        className="font-bold underline cursor-pointer"
+                      >
+                        Go to sign in →
+                      </button>
+                      {onForgotPassword && (
+                        <button
+                          type="button"
+                          onClick={() => onForgotPassword(email)}
+                          className="font-bold underline cursor-pointer"
+                        >
+                          Set a password instead →
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
