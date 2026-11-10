@@ -345,7 +345,7 @@ function OrganizationList({ admin, onCreate, onOpen }: {
               <div key={organization.id} className="grid gap-4 px-5 py-5 md:grid-cols-[1.5fr_1fr_1fr_auto] md:items-center">
                 <div>
                   <p className="font-bold text-text">{organization.name}</p>
-                  <p className="mt-1 text-sm text-muted">{organization.contactEmail}</p>
+                  <p className="mt-1 text-sm text-muted">{organization.contactEmail || "No contact email"}</p>
                 </div>
                 <p className="text-sm font-medium text-text">{organization.category}</p>
                 <p className="text-sm text-muted">
@@ -359,8 +359,16 @@ function OrganizationList({ admin, onCreate, onOpen }: {
             ))}
           </div>
         </div>
-      ) : (
+      ) : admin.loading ? (
+        <EmptyState title="Loading organizations" detail="Reading the organizations from your workspace." />
+      ) : admin.organizations.length ? (
         <EmptyState title="No organizations found" detail="Try another search term or status filter." />
+      ) : (
+        <EmptyState
+          title="No organizations yet"
+          detail="Create the first organization, then add the events it runs."
+          action={<Button fullWidth={false} size="compact" onClick={onCreate}>Create organization</Button>}
+        />
       )}
     </div>
   )
@@ -412,7 +420,7 @@ function OrganizationDetails({ organization, admin, onBack, onEdit, onCreateEven
           )}
           <div className="mt-6 grid gap-5 border-t border-border pt-6 sm:grid-cols-2">
             {[
-              ["Contact email", organization.contactEmail],
+              ["Contact email", organization.contactEmail || "Not provided"],
               ["Phone", organization.phone || "Not provided"],
               ["Timezone", organization.timezone],
               ["Address", organization.address || "Not provided"],
@@ -485,11 +493,13 @@ function OrganizationForm({ initial, onCancel, onSave }: {
   }
 
   function submit() {
-    if (!form.name.trim() || !form.contactEmail.trim() || !form.timezone.trim()) {
-      setError("Organization name, contact email, and timezone are required.")
+    if (!form.name.trim() || !form.timezone.trim()) {
+      setError("Organization name and timezone are required.")
       return
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.contactEmail)) {
+    // The contact email is optional (organizations created in the database may
+    // not have one yet), but a malformed address is still rejected.
+    if (form.contactEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.contactEmail.trim())) {
       setError("Enter a valid contact email address.")
       return
     }
@@ -614,8 +624,16 @@ function EventList({ admin, onCreate, onEdit }: {
             )
           })}
         </div>
-      ) : (
+      ) : admin.loading ? (
+        <EmptyState title="Loading events" detail="Reading the schedule from your workspace." />
+      ) : admin.events.length ? (
         <EmptyState title="No events found" detail="Try another search term or status filter." />
+      ) : (
+        <EmptyState
+          title="No events yet"
+          detail="Create an event for one of your organizations to start scheduling."
+          action={<Button fullWidth={false} size="compact" onClick={onCreate}>Create event</Button>}
+        />
       )}
     </div>
   )

@@ -3,8 +3,7 @@ import type { FormData } from "./types"
 import { Button, InputField, Card, BackButton, ClockIcon } from "../../shared/ui"
 import { EXAMPLE_GROUPS, PENDING_STEPS } from "./data"
 import type { JoinRequestStatus } from "../admin/types"
-import { isMemberApiConfigured } from "../../lib/memberApi"
-import { resolveGroup, groupCodeFromLink } from "./joinGroups"
+import { resolveGroup, groupCodeFromLink, usesSampleGroups } from "./joinGroups"
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
@@ -77,7 +76,7 @@ function DesktopFormPanel({ children }: { children: React.ReactNode }) {
 export function DesktopJoinGroupScreen({ data, setData, onJoin, onBack }: {
   data: FormData
   setData: (d: Partial<FormData>) => void
-  onJoin: (group: { groupCode: string; groupName: string }) => Promise<void>
+  onJoin: (group: { groupCode: string; groupName: string; organizationId?: string }) => Promise<void>
   onBack: () => void
 }) {
   const [error, setError] = useState("")
@@ -95,7 +94,7 @@ export function DesktopJoinGroupScreen({ data, setData, onJoin, onBack }: {
       }
       setData({ groupCode: code, groupName: group.name })
       setError("")
-      await onJoin({ groupCode: code, groupName: group.name })
+      await onJoin({ groupCode: code, groupName: group.name, organizationId: group.id })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to submit the group request.")
     }
@@ -114,7 +113,7 @@ export function DesktopJoinGroupScreen({ data, setData, onJoin, onBack }: {
           <div className="flex flex-col gap-6">
             {!pasteMode ? (
               <>
-                <InputField label="Group Code" id="d-group-code" value={data.groupCode} onChange={v => setData({ groupCode: v })} helper="Your group leader gave you this code. Example: LECT-2024" error={error} placeholder="Example: LECT-2024" autoComplete="off" />
+                <InputField label="Group Code" id="d-group-code" value={data.groupCode} onChange={v => setData({ groupCode: v })} helper={usesSampleGroups ? "Your group leader gave you this code. Example: LECT-2024" : "Use the join code your group leader shared with you."} error={error} placeholder={usesSampleGroups ? "Example: LECT-2024" : "Enter your group code"} autoComplete="off" />
                 <div className="flex items-center gap-3">
                   <div className="flex-1 h-px bg-[#D1D9E8]" /><span className="text-[#94A3B8] text-[14px] font-medium">or</span><div className="flex-1 h-px bg-[#D1D9E8]" />
                 </div>
@@ -136,7 +135,7 @@ export function DesktopJoinGroupScreen({ data, setData, onJoin, onBack }: {
             <Button onClick={handleJoin} variant="primary">Join This Group</Button>
           </div>
         </Card>
-        {!isMemberApiConfigured && <div className="mt-5 bg-[#EFF6FF] border border-[#2563EB]/20 rounded-xl p-4">
+        {usesSampleGroups && <div className="mt-5 bg-[#EFF6FF] border border-[#2563EB]/20 rounded-xl p-4">
           <p className="text-[#2563EB] font-semibold text-[15px] mb-2">Try these sample codes:</p>
           <div className="flex flex-wrap gap-2">
             {Object.keys(EXAMPLE_GROUPS).map(code => (
