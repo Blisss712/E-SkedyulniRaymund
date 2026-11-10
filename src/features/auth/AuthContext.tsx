@@ -724,8 +724,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  /**
+   * Sends the SMS code for phone sign-in.
+   *
+   * `createUser` is false for the coordinator form: a number that holds no
+   * account cannot have been appointed to a ministry, so creating one would only
+   * produce a member account that the role check turns away a moment later.
+   */
   async function signInWithPhone(
     phone: string,
+    options?: { createUser?: boolean },
   ): Promise<{ ok: boolean; error?: string; message?: string }> {
     if (!isSupabaseConfigured) {
       return {
@@ -746,11 +754,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { error } = await supabase.auth.signInWithOtp({
         phone: normalized,
         options: {
-          shouldCreateUser: true,
+          shouldCreateUser: options?.createUser ?? true,
         },
       })
 
       if (error) {
+        // With sign-ups disabled Supabase refuses an unknown number with
+        // "Signups not allowed for otp" instead of sending a code.
+        if (/signups? not allowed/i.test(error.message)) {
+          return {
+            ok: false,
+            error:
+              options?.createUser === false
+                ? "That mobile number is not linked to a coordinator account yet. Ask an administrator to appoint your account first, then try again."
+                : "Phone sign-up is disabled for this project. Enable phone sign-ins in Supabase Authentication → Providers → Phone.",
+          }
+        }
         return { ok: false, error: error.message }
       }
 
@@ -800,6 +819,65 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ok: false,
         error: err instanceof Error ? err.message : "An unexpected error occurred.",
       }
+    }
+  }
+
+  /**
+   * Leader/coordinator phone sign-in, step 1: text a code to the number already
+   * on an account. The member form creates accounts, this one never does.
+   */
+  async function sendCoordinatorPhoneCode(
+    phone: string,
+  ): Promise<{ ok: boolean; error?: string; message?: string }> {
+    return signInWithPhone(phone, { createUser: false })
+  }
+
+  /**
+   * Leader/coordinator phone sign-in, step 2: verify the code, then apply the
+   * same appointment rule as the password form.
+   *
+   * A valid code only proves the number; it does not prove the account is a
+   * coordinator. The session created by the code is ended again when the account
+   * turns out to be an ordinary member or an administrator, so a phone sign-in
+   * cannot be used to slip into the member dashboard from this screen.
+   */
+  async function verifyCoordinatorPhoneOtp(
+    phone: string,
+    token: string,
+  ): Promise<AuthResult> {
+    if (!isSupabaseConfigured) {
+      return {
+        ok: false,
+        code: "unavailable",
+        error: "Coordinator sign in needs the Supabase environment variables.",
+      }
+    }
+
+    const verified = await verifyPhoneOtp(phone, token)
+    if (!verified.ok) {
+      return { ok: false, error: verified.error }
+    }
+
+    const resolvedProfile = verified.profile
+    if (resolvedProfile?.role === "leader") {
+      return { ok: true, profile: resolvedProfile }
+    }
+
+    await supabase.auth.signOut()
+    setUser(null)
+    setSession(null)
+    setProfile(null)
+
+    if (resolvedProfile?.role === "admin") {
+      return {
+        ok: false,
+        error:
+          "That mobile number belongs to an administrator account. Use the Admin sign in.",
+      }
+    }
+    return {
+      ok: false,
+      error: `${resolvedProfile?.email || "That mobile number"} signed in, but it is not appointed as a ministry coordinator yet. Ask an administrator to appoint it in the Administrator Workspace → Coordinators.`,
     }
   }
 
@@ -1031,6 +1109,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signUpWithEmail,
         signInWithProvider,
         signInWithPhone,
+        sendCoordinatorPhoneCode,
+        verifyCoordinatorPhoneOtp,
         verifyPhoneOtp,
         sendPasswordReset,
         updatePassword,

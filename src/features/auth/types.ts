@@ -102,7 +102,23 @@ export type AuthContextType = {
   ) => Promise<{ ok: boolean; error?: string }>
   signInWithPhone: (
     phone: string,
+    options?: { createUser?: boolean },
   ) => Promise<{ ok: boolean; error?: string; message?: string }>
+  /**
+   * Leader/coordinator phone sign-in, step 1: text a code to a number that
+   * already belongs to an account. Never creates an account.
+   */
+  sendCoordinatorPhoneCode: (
+    phone: string,
+  ) => Promise<{ ok: boolean; error?: string; message?: string }>
+  /**
+   * Leader/coordinator phone sign-in, step 2: verify the code and require that
+   * the account is appointed to a ministry, like the password form does.
+   */
+  verifyCoordinatorPhoneOtp: (
+    phone: string,
+    token: string,
+  ) => Promise<AuthResult>
   verifyPhoneOtp: (
     phone: string,
     token: string,

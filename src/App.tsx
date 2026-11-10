@@ -346,6 +346,13 @@ export default function App() {
   useEffect(() => {
     if (loading || !authNotice || user) return
     if (screenRef.current !== "welcome") return
+    // A refused Google/Facebook attempt that started on the coordinator screen
+    // returns to that screen. The pending workspace intent is consumed here so a
+    // later sign-in cannot be redirected by an abandoned attempt.
+    if (takeWorkspaceIntent() === "coordinator") {
+      setScreen("coordinator-login")
+      return
+    }
     setAuthTab("signin")
     setScreen("auth")
   }, [loading, authNotice, user])
@@ -499,9 +506,16 @@ export default function App() {
     case "coordinator-login":
       return (
         <CoordinatorLoginScreen
-          onBack={() => go("welcome")}
+          notice={authNotice}
+          onBack={() => {
+            setAuthNotice("")
+            go("welcome")
+          }}
           onAuthenticated={() => enterWorkspace()}
-          onAdmin={() => go("admin-login")}
+          onAdmin={() => {
+            setAuthNotice("")
+            go("admin-login")
+          }}
           onForgotPassword={email => startPasswordReset(email)}
         />
       )

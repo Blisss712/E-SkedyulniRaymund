@@ -97,10 +97,14 @@ The app now handles this in three ways:
   password" screen. The link signs into the **existing** account, so the saved
   password is added to the same user — same ministries, join requests, profile,
   and schedule. Afterwards either Google/Facebook or email + password works.
-- The Leader/Coordinator screen also has **Continue with Google**, so an
-  appointed coordinator who signed up with Google does not need a password at
-  all. The app remembers that the Google round trip started there and opens the
-  coordinator workspace instead of the member dashboard.
+- The Leader/Coordinator screen offers the same three ways in as the member
+  screen: **Continue with Google**, **Continue with Facebook**, and **Continue
+  with Phone** (a one-time SMS code), followed by email + password. An appointed
+  coordinator who signed up with a provider or a mobile number does not need a
+  password at all. The app remembers that the Google/Facebook round trip started
+  there and opens the coordinator workspace instead of the member dashboard; the
+  phone code is verified on that screen and the session is ended again if the
+  number's account is not appointed.
 
 For the emailed link to come back to the app:
 
@@ -541,12 +545,16 @@ is signed out again and told which form to use.
 
 - Click **Leader / Coordinator sign in** on the welcome screen (also linked from the member
   sign-in screen).
-- Sign in with **Continue with Google** when the member account was created that way, or with
-  the **email and password** on the account. An account made with Google/Facebook has no
-  password until one is set through **Forgot password?** (see "Google/Facebook accounts have
-  no password"). There is no username form and no offline demo coordinator account.
+- Sign in with **Continue with Google** or **Continue with Facebook** when the member account
+  was created that way, with **Continue with Phone** and the 6-digit SMS code when the account
+  uses a mobile number, or with the **email and password** on the account. An account made with
+  Google/Facebook/phone has no password until one is set through **Forgot password?** (see
+  "Google/Facebook accounts have no password"). There is no username form and no offline demo
+  coordinator account.
 - Only appointed coordinators pass. An administrator account is rejected with a pointer to
   the admin form, and an ordinary member is told to ask an administrator for an appointment.
+  The phone form never creates an account, and a code verified for a number whose account is
+  not appointed signs that account out again.
 - A coordinator can still use the normal member **Sign in**: that opens their member
   dashboard, where the **Coordinator Workspace** button is available.
 
