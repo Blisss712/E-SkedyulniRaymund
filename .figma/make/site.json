@@ -1,0 +1,11 @@
+{
+  "title": "E-Skedyul",
+  "description": "Simplifies parishioner and staff onboarding with clear sign-up, login, and group joining flows designed for elderly users prioritizing ease and clarity.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

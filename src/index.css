@@ -1,0 +1,104 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, sans-serif;
+
+  --color-navy: #1B3A6B;
+  --color-navy-dark: #142d54;
+  --color-navy-light: #2a509a;
+  --color-navy-soft: #E8EDF7;
+  --color-gold: #C9921A;
+  --color-gold-light: #FEF3DC;
+  --color-green: #2D7A4F;
+  --color-green-light: #E8F5EE;
+  --color-red: #C0392B;
+  --color-red-light: #FDEDEC;
+  --color-blue: #2563EB;
+  --color-blue-light: #EFF6FF;
+
+  --color-bg: #F4F6FB;
+  --color-surface: #FFFFFF;
+  --color-border: #D1D9E8;
+  --color-text: #1A202C;
+  --color-muted: #64748B;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  background-color: #F4F6FB;
+  color: #1A202C;
+}
+
+/* Hide scrollbars by default */
+::-webkit-scrollbar { display: none; }
+* { scrollbar-width: none; }
+
+/* Focus ring */
+:focus-visible {
+  outline: 3px solid #1B3A6B;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+body {
+  background-color: #F4F6FB;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Press animation: buttons shrink slightly while tapped, then spring back */
+@layer base {
+  button {
+    transition: transform 160ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  button:not(:disabled):active {
+    transform: scale(0.95);
+    transition-duration: 80ms;
+  }
+}
+
+/* Popup sheets: backdrop fades in, panel slides up; reversed while closing (useSheetClose) */
+.sheet-backdrop {
+  animation: sheet-backdrop-in 240ms ease-out both;
+}
+.sheet-panel {
+  animation: sheet-panel-in 380ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+[data-closing="true"] {
+  pointer-events: none;
+}
+[data-closing="true"] .sheet-backdrop {
+  animation: sheet-backdrop-out 200ms ease-in both;
+}
+[data-closing="true"] .sheet-panel {
+  animation: sheet-panel-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes sheet-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheet-backdrop-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes sheet-panel-in { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes sheet-panel-out { from { transform: translateY(0); } to { transform: translateY(100%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  button, button:not(:disabled):active {
+    transform: none;
+  }
+  .sheet-backdrop, .sheet-panel,
+  [data-closing="true"] .sheet-backdrop, [data-closing="true"] .sheet-panel {
+    animation-name: sheet-backdrop-in;
+    animation-duration: 150ms;
+  }
+  [data-closing="true"] .sheet-backdrop, [data-closing="true"] .sheet-panel {
+    animation-name: sheet-backdrop-out;
+  }
+}
+
+/* Android / phone notch safe area. The home screen's navy header handles its own top inset. */
+body:not([data-screen="home"]) {
+  padding-top: env(safe-area-inset-top, 0px);
+}
