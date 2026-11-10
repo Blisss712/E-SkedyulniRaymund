@@ -4,6 +4,8 @@ import type { AdminEvent, EventDraft, Organization, OrganizationDraft, Organizat
 import { adminApi, isAdminApiConfigured, loadAdminData } from "./api"
 import { isSupabaseConfigured } from "../../lib/supabase"
 import { useAuth } from "../auth/AuthContext"
+import { notifyEventsChanged } from "./eventsSync"
+import { eventSchedule, scheduleIssue, schedulesOverlap } from "./eventSchedule"
 import {
   createOrganizationRow,
   deleteOrganizationRow,
@@ -242,10 +244,14 @@ export function useAdmin(scope: AdminScope = {}) {
         void adminApi.updateEvent(id, draft)
           .then(saved => replaceEvent(id, saved))
           .catch(reportFailure)
+          .finally(notifyEventsChanged)
       } else if (isSupabaseConfigured) {
         void updateEventRow(id, draft)
           .then(saved => replaceEvent(id, saved))
           .catch(reportFailure)
+          .finally(notifyEventsChanged)
+      } else {
+        notifyEventsChanged()
       }
       return { ok: true, id }
     }
@@ -259,10 +265,14 @@ export function useAdmin(scope: AdminScope = {}) {
       void adminApi.createEvent(draft)
         .then(saved => replaceEvent(next.id, saved))
         .catch(reportFailure)
+        .finally(notifyEventsChanged)
     } else if (isSupabaseConfigured) {
       void createEventRow(next.id, draft)
         .then(saved => replaceEvent(next.id, saved))
         .catch(reportFailure)
+        .finally(notifyEventsChanged)
+    } else {
+      notifyEventsChanged()
     }
     return { ok: true, id: next.id }
   }
@@ -282,11 +292,15 @@ export function useAdmin(scope: AdminScope = {}) {
       void adminApi.duplicateEvent(id)
         .then(saved => replaceEvent(duplicate.id, saved))
         .catch(reportFailure)
+        .finally(notifyEventsChanged)
     } else if (isSupabaseConfigured) {
       const { id: _sourceId, createdAt: _createdAt, ...draft } = duplicate
       void createEventRow(duplicate.id, draft)
         .then(saved => replaceEvent(duplicate.id, saved))
         .catch(reportFailure)
+        .finally(notifyEventsChanged)
+    } else {
+      notifyEventsChanged()
     }
     return duplicate.id
   }
@@ -295,11 +309,15 @@ export function useAdmin(scope: AdminScope = {}) {
     const source = events.find(event => event.id === id)
     if (!source || !inScope(source.organizationId)) return
     setEvents(current => current.map(event => event.id === id ? { ...event, status: "cancelled" } : event))
-    if (useRemoteApi) void adminApi.cancelEvent(id).catch(reportFailure)
-    else if (isSupabaseConfigured) {
+    if (useRemoteApi) {
+      void adminApi.cancelEvent(id).catch(reportFailure).finally(notifyEventsChanged)
+    } else if (isSupabaseConfigured) {
       void setEventStatusRow(id, "cancelled")
         .then(saved => replaceEvent(id, saved))
         .catch(reportFailure)
+        .finally(notifyEventsChanged)
+    } else {
+      notifyEventsChanged()
     }
   }
 
@@ -307,20 +325,27 @@ export function useAdmin(scope: AdminScope = {}) {
     const source = events.find(event => event.id === id)
     if (!source || !inScope(source.organizationId)) return
     setEvents(current => current.filter(event => event.id !== id))
-    if (useRemoteApi) void adminApi.deleteEvent(id).catch(reportFailure)
-    else if (isSupabaseConfigured) void deleteEventRow(id).catch(reportFailure)
+    if (useRemoteApi) {
+      void adminApi.deleteEvent(id).catch(reportFailure).finally(notifyEventsChanged)
+    } else if (isSupabaseConfigured) {
+      void deleteEventRow(id).catch(reportFailure).finally(notifyEventsChanged)
+    } else {
+      notifyEventsChanged()
+    }
   }
 
   function findConflict(draft: EventDraft, editingId?: string) {
-    const start = new Date(draft.startsAt).getTime()
-    const end = new Date(draft.endsAt).getTime()
-    if (!start || !end || end <= start) return null
+    const schedule = eventSchedule(draft)
+    if (scheduleIssue(schedule)) return null
     return visibleEvents.find(event => {
       if (event.id === editingId || event.status === "cancelled") return false
       const sameContext =
         event.organizationId === draft.organizationId ||
         (event.location.trim() && event.location.toLowerCase() === draft.location.trim().toLowerCase())
-      return sameContext && start < new Date(event.endsAt).getTime() && end > new Date(event.startsAt).getTime()
+      if (!sameContext) return false
+      const other = eventSchedule(event)
+      if (scheduleIssue(other)) return false
+      return schedulesOverlap(schedule, other)
     }) ?? null
   }
 

@@ -19,6 +19,7 @@ import { useAvailability } from "./features/availability/useAvailability"
 import { SlotList, SlotVolunteerScreen, SlotServingScreen, SlotFilledScreen } from "./features/slots/slots"
 import { useSlots } from "./features/slots/useSlots"
 import { AdminScreen } from "./features/admin/admin"
+import { usePublishedEvents } from "./features/admin/usePublishedEvents"
 import { AdminLoginScreen } from "./features/admin/login"
 import { CoordinatorLoginScreen } from "./features/admin/coordinatorLogin"
 import { useJoinRequests } from "./features/admin/useJoinRequests"
@@ -75,6 +76,8 @@ export default function App() {
   const availability = useAvailability()
   const slots = useSlots()
   const joinRequests = useJoinRequests()
+  // Published events belong on the member's timetable next to their availability.
+  const publishedEvents = usePublishedEvents()
   /** One id per ministry the member just asked to join, in the order sent. */
   const [activeRequestIds, setActiveRequestIds] = useState<string[]>([])
 
@@ -329,7 +332,7 @@ export default function App() {
             overrides={availability.overrides}
             slots={slots.slots}
             error={availability.error}
-            scheduledEvents={[]}
+            scheduledEvents={publishedEvents}
             onViewSlot={slot => {
               slots.setActiveSlot(slot)
               setDashboardReturnScreen(embedded ? "admin" : "home")

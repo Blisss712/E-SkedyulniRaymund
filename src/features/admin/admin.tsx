@@ -2,6 +2,14 @@ import { useMemo, useState } from "react"
 import { Button, InputField } from "../../shared/ui"
 import { useAdmin } from "./useAdmin"
 import { CoordinatorsSection } from "./coordinators"
+import {
+  combineDateTime,
+  describeSchedule,
+  eventSchedule,
+  formatEventWhen,
+  scheduleIssue,
+  type EventSchedule,
+} from "./eventSchedule"
 import type {
   AdminEvent,
   EventDraft,
@@ -77,15 +85,6 @@ function formatDateTime(value: string) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value))
-}
-
-function splitDateTime(value: string): [string, string] {
-  const [date = "", time = ""] = value.split("T")
-  return [date, time.slice(0, 5)]
-}
-
-function combineDateTime(date: string, time: string) {
-  return date && time ? `${date}T${time}` : ""
 }
 
 function StatusBadge({ status }: { status: OrganizationStatus | EventStatus }) {
@@ -223,7 +222,7 @@ function Dashboard({ admin, onEvents, scoped }: {
               <div key={event.id} className="flex items-center justify-between gap-4 py-4">
                 <div className="min-w-0">
                   <p className="truncate font-bold text-text">{event.title}</p>
-                  <p className="mt-1 text-sm text-muted">{organization?.name} · {formatDateTime(event.startsAt)}</p>
+                  <p className="mt-1 text-sm text-muted">{organization?.name} · {formatEventWhen(event)}</p>
                 </div>
                 <StatusBadge status={event.status} />
               </div>
@@ -528,7 +527,7 @@ function OrganizationDetails({ organization, admin, onBack, onEdit, onCreateEven
               <div key={event.id} className="flex flex-col justify-between gap-3 px-5 py-4 sm:flex-row sm:items-center">
                 <div>
                   <p className="font-bold text-text">{event.title}</p>
-                  <p className="mt-1 text-sm text-muted">{formatDateTime(event.startsAt)} · {event.location}</p>
+                  <p className="mt-1 text-sm text-muted">{formatEventWhen(event)} · {event.location}</p>
                 </div>
                 <StatusBadge status={event.status} />
               </div>
@@ -676,7 +675,7 @@ function EventList({ admin, onCreate, onEdit, scoped }: {
                       <StatusBadge status={event.status} />
                     </div>
                     <p className="mt-2 text-sm font-semibold text-navy">{organization?.name}</p>
-                    <p className="mt-1 text-sm text-muted">{formatDateTime(event.startsAt)} · {event.location}</p>
+                    <p className="mt-1 text-sm text-muted">{formatEventWhen(event)} · {event.location}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
                     <Button variant="secondary" size="compact" onClick={() => onEdit(event.id)} className="w-full sm:w-auto">Edit</Button>
@@ -724,12 +723,9 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved, scoped }
     : activeOrganizations
   const defaultOrganization = organizationId || initial?.organizationId || activeOrganizations[0]?.id || ""
   const [form, setForm] = useState<EventDraft>(initial ?? emptyEvent(defaultOrganization))
-  const [startDate, startTime] = splitDateTime(form.startsAt)
-  const [endDate, endTime] = splitDateTime(form.endsAt)
-  const [selectedStartDate, setSelectedStartDate] = useState(startDate)
-  const [selectedStartTime, setSelectedStartTime] = useState(startTime)
-  const [selectedEndDate, setSelectedEndDate] = useState(endDate)
-  const [selectedEndTime, setSelectedEndTime] = useState(endTime)
+  const [schedule, setSchedule] = useState<EventSchedule>(() =>
+    eventSchedule(initial ?? emptyEvent(defaultOrganization)),
+  )
   const [error, setError] = useState("")
   const conflict = admin.findConflict(form, initial?.id)
 
@@ -738,36 +734,38 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved, scoped }
     setError("")
   }
 
-  function updateStartDate(value: string) {
-    setSelectedStartDate(value)
-    update("startsAt", combineDateTime(value, selectedStartTime))
-  }
-
-  function updateStartTime(value: string) {
-    setSelectedStartTime(value)
-    update("startsAt", combineDateTime(selectedStartDate, value))
-  }
-
-  function updateEndDate(value: string) {
-    setSelectedEndDate(value)
-    update("endsAt", combineDateTime(value, selectedEndTime))
-  }
-
-  function updateEndTime(value: string) {
-    setSelectedEndTime(value)
-    update("endsAt", combineDateTime(selectedEndDate, value))
+  /**
+   * The dates and the daily time range are edited independently: changing one
+   * never discards the other. This is what lets a two-day event run 1:00–3:00
+   * PM on both days instead of becoming one 26-hour block.
+   */
+  function updateSchedule(patch: Partial<EventSchedule>) {
+    const next: EventSchedule = { ...schedule, ...patch }
+    // Keep a new event's end date in step with its start date until the
+    // coordinator picks one explicitly.
+    if (patch.startDate && !next.endDate) next.endDate = patch.startDate
+    setSchedule(next)
+    setForm(current => ({
+      ...current,
+      startsAt: combineDateTime(next.startDate, next.startTime),
+      endsAt: combineDateTime(next.endDate, next.endTime),
+    }))
+    setError("")
   }
 
   function submit(status: "draft" | "published") {
-    if (!form.organizationId || !form.title.trim() || !form.startsAt || !form.endsAt || !form.location.trim()) {
-      setError("Organization, title, start, end, and location are required.")
+    if (!form.organizationId || !form.title.trim() || !form.location.trim()) {
+      setError("Organization, title, and location are required.")
       return
     }
-    if (new Date(form.endsAt) <= new Date(form.startsAt)) {
-      setError("The end date and time must be after the start.")
+    const issue = scheduleIssue(schedule)
+    if (issue) {
+      setError(issue)
       return
     }
-    if (form.registrationDeadline && new Date(form.registrationDeadline) > new Date(form.startsAt)) {
+    const startsAt = combineDateTime(schedule.startDate, schedule.startTime)
+    const endsAt = combineDateTime(schedule.endDate, schedule.endTime)
+    if (form.registrationDeadline && new Date(form.registrationDeadline) > new Date(startsAt)) {
       setError("Registration must close before the event starts.")
       return
     }
@@ -775,7 +773,7 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved, scoped }
       setError("Capacity must be at least 1.")
       return
     }
-    const result = admin.saveEvent({ ...form, status }, initial?.id)
+    const result = admin.saveEvent({ ...form, startsAt, endsAt, status }, initial?.id)
     if (!result.ok) {
       setError(result.message || "Unable to save the event.")
       return
@@ -827,13 +825,31 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved, scoped }
           <div className="sm:col-span-2">
             <InputField id="event-description" label="Short description" value={form.description} onChange={value => update("description", value)} placeholder="Purpose or helpful attendee details" />
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <InputField id="event-start-date" type="date" label="Start date" value={selectedStartDate} onChange={updateStartDate} />
-            <InputField id="event-start-time" type="time" label="Start time" value={selectedStartTime} onChange={updateStartTime} />
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <InputField id="event-end-date" type="date" label="End date" value={selectedEndDate} onChange={updateEndDate} />
-            <InputField id="event-end-time" type="time" label="End time" value={selectedEndTime} onChange={updateEndTime} />
+          <div className="rounded-2xl border border-border bg-bg/60 p-4 sm:col-span-2">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <p className="text-sm font-bold text-text">Event dates</p>
+              <p className="text-xs font-semibold text-muted">The days the event runs</p>
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <InputField id="event-start-date" type="date" label="Start date" value={schedule.startDate} onChange={value => updateSchedule({ startDate: value })} />
+              <InputField id="event-end-date" type="date" label="End date" value={schedule.endDate} min={schedule.startDate || undefined} onChange={value => updateSchedule({ endDate: value })} />
+            </div>
+            <div className="mt-5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <p className="text-sm font-bold text-text">Daily time range</p>
+              <p className="text-xs font-semibold text-muted">The same time on every day</p>
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <InputField id="event-start-time" type="time" label="Start time" value={schedule.startTime} onChange={value => updateSchedule({ startTime: value })} />
+              <InputField id="event-end-time" type="time" label="End time" value={schedule.endTime} onChange={value => updateSchedule({ endTime: value })} />
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-muted">
+              A two-day event from 1:00 PM to 3:00 PM runs 1:00–3:00 PM on both days.
+            </p>
+            {!scheduleIssue(schedule) && (
+              <p className="mt-3 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-navy">
+                {describeSchedule(schedule)}
+              </p>
+            )}
           </div>
           <InputField id="event-location" label="Location" value={form.location} onChange={value => update("location", value)} placeholder="Venue or meeting link" />
           <InputField id="event-capacity" type="number" label="Maximum attendees" value={String(form.capacity)} onChange={value => update("capacity", Number(value))} />
@@ -859,7 +875,7 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved, scoped }
             </div>
           </div>
           {form.recurrence !== "none" && (
-            <InputField id="repeat-until" type="date" label="Repeat until" value={form.repeatUntil} onChange={value => update("repeatUntil", value)} />
+            <InputField id="repeat-until" type="date" label="Repeat until" value={form.repeatUntil} onChange={value => update("repeatUntil", value)} helper="Optional. Leave blank to keep repeating." />
           )}
         </div>
         {conflict && (

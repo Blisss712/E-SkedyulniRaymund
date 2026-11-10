@@ -26,7 +26,7 @@ export interface TimetableEvent {
 
   label: string // e.g. "Available"
 
-  status: "available" | "unavailable" | "serving"
+  status: "available" | "unavailable" | "serving" | "event"
 
   color: TimetableColor
 
@@ -37,6 +37,8 @@ export interface TimetableEvent {
   note?: string // message at the bottom of the pop-up
 
   repeatsWeekly?: boolean
+
+  repeatsMonthly?: boolean
 
   allDay?: boolean // fills the whole visible day; start/end are ignored
 
@@ -49,6 +51,8 @@ const STATUS_TEXT: Record<TimetableEvent["status"], string> = {
   unavailable: "Not available",
 
   serving: "Serving",
+
+  event: "Event",
 }
 
 // ─── Constants & helpers ──────────────────────────────────────────────────────
@@ -241,9 +245,11 @@ function EventSheet({
     "How often",
     event.repeatsWeekly
       ? "Repeats every week"
-      : event.status === "serving"
-        ? "One-time"
-        : "One-time change",
+      : event.repeatsMonthly
+        ? "Repeats every month"
+        : event.status === "serving" || event.status === "event"
+          ? "One-time"
+          : "One-time change",
   ])
 
   const { closing, close } = useSheetClose()

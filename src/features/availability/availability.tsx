@@ -25,6 +25,7 @@ import {
   type Assignment,
 } from "../../integration/assignments"
 import type { AdminEvent } from "../admin/types"
+import { eventOccurrences, eventSchedule, formatEventDates } from "../admin/eventSchedule"
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -220,51 +221,36 @@ function availabilityEvents(
     })
   }
 
+  const weekStartKey = localDateKey(weekStart)
+  const weekEndKey = localDateKey(addDaysTo(weekStart, 6))
+
   for (const event of scheduledEvents) {
     if (event.status !== "published") continue
 
-    const start = new Date(event.startsAt)
-    const end = new Date(event.endsAt)
-    const repeatUntil = event.repeatUntil
-      ? new Date(`${event.repeatUntil}T23:59:59`)
-      : start
-    const startDateKey = localDateKey(start)
-    const repeatUntilDateKey = localDateKey(repeatUntil)
-    const cursor = new Date(weekStart)
+    const schedule = eventSchedule(event)
 
-    for (let day = 0; day < 7; day += 1) {
-      const date = new Date(cursor)
-      date.setDate(cursor.getDate() + day)
-      const sameDay =
-        event.recurrence === "weekly"
-          ? date.getDay() === start.getDay()
-          : event.recurrence === "monthly"
-            ? date.getDate() === start.getDate()
-            : localDateKey(date) === startDateKey
+    // A multi-day event shows one block on each of its days, always using the
+    // same daily time range.
+    for (const block of eventOccurrences(event, weekStartKey, weekEndKey)) {
+      const day = dayInWeek(block.date, weekStart)
 
-      if (
-        !sameDay ||
-        localDateKey(date) > repeatUntilDateKey ||
-        localDateKey(date) < startDateKey
-      )
-        continue
-
-      const startTime = `${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`
-      const endTime = `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`
+      if (day < 0) continue
 
       events.push({
-        id: `scheduled-${event.id}-${date.toISOString().slice(0, 10)}`,
+        id: `scheduled-${event.id}-${block.date}`,
         day,
-        start: startTime,
-        end: endTime,
+        start: block.start,
+        end: block.end,
         label: event.title,
-        status: "serving",
+        status: "event",
         color: "navy",
         detail: event.location,
         rows: [
-          ["Organization", event.organizationId],
+          ["Dates", formatEventDates(schedule)],
           ["Visibility", event.visibility === "public" ? "Public" : "Members only"],
         ],
+        repeatsWeekly: event.recurrence === "weekly",
+        repeatsMonthly: event.recurrence === "monthly",
         note: "Published schedule",
       })
     }
@@ -938,7 +924,7 @@ export function AvailabilityTab({
     legend: [
       { label: "Available", color: "green" as const },
       { label: "Not available", color: "red" as const },
-      { label: "Serving", color: "navy" as const },
+      { label: "Serving & events", color: "navy" as const },
     ],
 
     view: position.view,
