@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS public.member_profiles (
     email VARCHAR(255) NULL,
     full_name VARCHAR(150) NOT NULL DEFAULT '',
     active BOOLEAN NOT NULL DEFAULT TRUE,
+    -- FALSE until the member finishes the in-app setup wizard (name + join code).
+    -- Social sign-ups already carry the provider's name, so the name alone cannot
+    -- tell a new account from a returning one. See supabase/member_onboarding.sql
+    -- for projects that installed this schema before the column existed.
+    onboarded BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

@@ -218,7 +218,7 @@ function JoinRequestList({ requests, onApprove, onReject }: {
     <div className="space-y-6">
       <AdminHeader
         title="Member join requests"
-        description="Review requests submitted using organization join codes."
+        description="Review requests sent with an organization join code, or without a code by choosing a ministry."
       />
       <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
         <p className="mb-2 text-sm font-semibold text-text">Filter requests</p>
@@ -258,7 +258,10 @@ function JoinRequestList({ requests, onApprove, onReject }: {
                       <p className="text-lg font-bold text-text">{request.memberName}</p>
                       <RequestStatusBadge status={request.status} />
                     </div>
-                    <p className="mt-2 text-sm text-muted">Requested to join <span className="font-semibold text-text">{request.groupName}</span> ({request.groupCode})</p>
+                    <p className="mt-2 text-sm text-muted">
+                      Requested to join <span className="font-semibold text-text">{request.groupName}</span>{" "}
+                      {request.groupCode ? `(${request.groupCode})` : "(no join code)"}
+                    </p>
                     <p className="mt-1 text-xs text-muted">Submitted {formatDateTime(request.requestedAt)}</p>
                   </div>
                   {request.status === "pending" && (
