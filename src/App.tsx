@@ -8,6 +8,8 @@ import { HomeScreen, type HomeTab, type Ministry } from "./shared/home"
 import { WelcomeScreen, TellNameScreen, JoinGroupScreen, PendingScreen } from "./features/wizard/wizard"
 import { DesktopJoinGroupScreen, DesktopPendingScreen } from "./features/wizard/desktop"
 import { useWizard } from "./features/wizard/useWizard"
+import type { JoinTarget } from "./features/wizard/types"
+import type { MinistryRequestProgress } from "./features/wizard/requestAccess"
 
 // Availability
 import { AvailabilityTab, SetRecurringScreen, AddOverrideScreen } from "./features/availability/availability"
@@ -56,7 +58,8 @@ export default function App() {
   const availability = useAvailability()
   const slots = useSlots()
   const joinRequests = useJoinRequests()
-  const [activeRequestId, setActiveRequestId] = useState("")
+  /** One id per ministry the member just asked to join, in the order sent. */
+  const [activeRequestIds, setActiveRequestIds] = useState<string[]>([])
 
   // Memberships and requests change while the member is away (an administrator
   // may approve a request), so re-read them whenever the dashboard opens.
@@ -76,10 +79,15 @@ export default function App() {
   }, [adminAuthenticated, screen])
 
   useEffect(() => {
-    if (screen !== "pending" || !activeRequestId || activeRequestId.startsWith("request-")) return
-    const timer = window.setInterval(() => void joinRequests.refreshRequest(activeRequestId), 3000)
+    if (screen !== "pending") return
+    // `request-` ids only exist in this browser's offline copy.
+    const ids = activeRequestIds.filter(id => !id.startsWith("request-"))
+    if (ids.length === 0) return
+    const timer = window.setInterval(() => {
+      ids.forEach(id => void joinRequests.refreshRequest(id))
+    }, 3000)
     return () => window.clearInterval(timer)
-  }, [screen, activeRequestId])
+  }, [screen, activeRequestIds])
 
   function go(to: Screen) {
     setPrevScreen(screen)
@@ -88,7 +96,7 @@ export default function App() {
 
   function reset() {
     wizard.reset()
-    setActiveRequestId("")
+    setActiveRequestIds([])
     setHomeTab("availability")
     setMinistryId("")
     availability.resetPosition()
@@ -332,31 +340,44 @@ export default function App() {
     case "join-group": {
       // Back returns to wherever the member came from: name entry during onboarding, or Home via "+ Join Another Ministry".
       const back = () => go(prevScreen)
-      const submitJoinRequest = async (group: { groupCode: string; groupName: string; organizationId?: string }) => {
-        const requestId = await joinRequests.createRequest({
-            memberName: wizard.form.name || profile?.fullName || "Member",
+      const memberName = wizard.form.name || profile?.fullName || "Member"
+      /**
+       * Each ticked ministry needs its own join request, because a request
+       * belongs to one organization. They are sent together so the member
+       * reaches one pending screen for the whole batch.
+       */
+      const submitJoinRequests = async (groups: JoinTarget[]) => {
+        const requestIds = await Promise.all(groups.map(group =>
+          joinRequests.createRequest({
+            memberName,
             groupCode: group.groupCode,
             groupName: group.groupName,
             organizationId: group.organizationId,
-        })
-        setActiveRequestId(requestId)
-        // The request is now pending, so the dashboard's ministry list changes.
+          }),
+        ))
+        setActiveRequestIds(requestIds)
+        // The requests are now pending, so the dashboard's ministry list changes.
         void ministries.refresh()
         go("pending")
       }
       return isDesktop ? (
-        <DesktopJoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={submitJoinRequest} onBack={back} />
+        <DesktopJoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={submitJoinRequests} onBack={back} />
       ) : (
-        <JoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={submitJoinRequest} onBack={back} />
+        <JoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={submitJoinRequests} onBack={back} />
       )
     }
 
-    case "pending":
+    case "pending": {
+      const progress: MinistryRequestProgress[] = activeRequestIds.map((id, index) => ({
+        name: wizard.form.groupNames?.[index] ?? wizard.form.groupName,
+        status: joinRequests.requests.find(request => request.id === id)?.status ?? "pending",
+      }))
       return isDesktop ? (
-        <DesktopPendingScreen data={wizard.form} status={joinRequests.requests.find(request => request.id === activeRequestId)?.status ?? "pending"} onBack={reset} onApproved={() => go("home")} />
+        <DesktopPendingScreen data={wizard.form} progress={progress} onBack={reset} onApproved={() => go("home")} />
       ) : (
-        <PendingScreen data={wizard.form} status={joinRequests.requests.find(request => request.id === activeRequestId)?.status ?? "pending"} onBack={reset} onApproved={() => go("home")} />
+        <PendingScreen data={wizard.form} progress={progress} onBack={reset} onApproved={() => go("home")} />
       )
+    }
 
     // ─── Home (holds the Availability and Open Slots tabs) ────────────────────
     case "home":
