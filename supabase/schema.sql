@@ -306,6 +306,12 @@ AS $$
 DECLARE
     v_req RECORD;
 BEGIN
+    -- Approval is an administrator action. The function is SECURITY DEFINER, so
+    -- without this check any caller who knew a request id could approve it.
+    IF NOT public.is_admin(auth.uid()) THEN
+        RAISE EXCEPTION 'Only administrators can approve join requests';
+    END IF;
+
     SELECT * INTO v_req FROM public.organization_join_requests WHERE id = req_id;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Join request not found';
@@ -325,6 +331,12 @@ BEGIN
     END IF;
 END;
 $$;
+
+-- Functions are executable by PUBLIC by default, which would include the anon
+-- role. Only signed-in administrators (and the service role) may call this.
+REVOKE ALL ON FUNCTION public.approve_join_request(VARCHAR, UUID, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.approve_join_request(VARCHAR, UUID, TEXT)
+    TO authenticated, service_role;
 
 -- Convenience function to promote an existing auth user to admin
 CREATE OR REPLACE FUNCTION public.make_admin(target_email TEXT, target_username TEXT DEFAULT NULL)

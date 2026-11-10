@@ -1,6 +1,14 @@
 import { isMemberApiConfigured, memberApi } from "../../lib/memberApi"
-import { isSupabaseConfigured, supabase } from "../../lib/supabase"
+import { isSupabaseConfigured } from "../../lib/supabase"
+import { findOrganizationByJoinCode } from "../organizations/api"
 import { EXAMPLE_GROUPS } from "./data"
+
+/**
+ * Only the offline demo shows the bundled sample codes. Once a real data source
+ * is connected an unknown code must stay unknown instead of resolving to a
+ * sample group that does not exist in the administrator's Organizations list.
+ */
+export const usesSampleGroups = !isMemberApiConfigured && !isSupabaseConfigured
 
 /**
  * Extracts the group code from a pasted join link, e.g.
@@ -14,34 +22,24 @@ export function groupCodeFromLink(link: string): string {
 
 /**
  * Turns a group code — typed directly or taken from the end of a pasted join
- * link — into the ministry name shown on the confirmation screen.
+ * link — into the organization it belongs to.
  *
- * The FastAPI backend is only one of the possible sources:
- *   1. When VITE_MEMBER_API_URL is set, the backend owns the lookup.
- *   2. Otherwise the active organizations are read straight from Supabase, so
- *      a real code such as ESK-LECTOR2025 resolves without the backend.
+ * The organization id is what ties the request to the Organizations list the
+ * administrator sees, so it travels with the name all the way to the request.
+ *
+ *   1. When the FastAPI backend is configured, it owns the lookup.
+ *   2. Otherwise the active organizations are read straight from Supabase.
  *   3. The bundled sample codes remain as a last resort for the demo mode.
  */
-export async function resolveGroup(code: string): Promise<{ name?: string }> {
+export async function resolveGroup(code: string): Promise<{ id?: string; name?: string }> {
   if (isMemberApiConfigured) {
-    return memberApi.lookupGroup(code)
+    const group = await memberApi.lookupGroup(code)
+    return { id: group.id, name: group.name }
   }
 
   if (isSupabaseConfigured) {
-    // join_code is matched case-insensitively, so escape LIKE wildcards first.
-    const pattern = code.replace(/[\\%_*]/g, character => `\\${character}`)
-
-    const { data, error } = await supabase
-      .from("organizations")
-      .select("name")
-      .ilike("join_code", pattern)
-      .eq("status", "active")
-      .limit(1)
-      .maybeSingle()
-
-    if (!error && data?.name) {
-      return { name: data.name }
-    }
+    const organization = await findOrganizationByJoinCode(code)
+    return organization ? { id: organization.id, name: organization.name } : {}
   }
 
   return { name: EXAMPLE_GROUPS[code] }
