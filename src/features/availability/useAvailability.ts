@@ -39,15 +39,17 @@ function initialTimetablePosition(): TimetablePosition {
 
 export function useAvailability() {
   const { user } = useAuth()
-  const [recurringEntries, setRecurringEntries] =
-    useState<RecurringAvail[]>(() =>
-      readStored(RECURRING_KEY, INITIAL_RECURRING),
-    )
+  const userId = user?.id ?? ""
+  // With a database connected the server owns this data, so the browser must
+  // not keep a copy that could leak from one signed-in account to the next.
+  // The local copy is only the offline demo's store.
+  const [recurringEntries, setRecurringEntries] = useState<RecurringAvail[]>(
+    () => (isSupabaseConfigured ? [] : readStored(RECURRING_KEY, INITIAL_RECURRING)),
+  )
 
-  const [overrides, setOverrides] =
-    useState<OneTimeOverride[]>(() =>
-      readStored(OVERRIDES_KEY, INITIAL_OVERRIDES),
-    )
+  const [overrides, setOverrides] = useState<OneTimeOverride[]>(() =>
+    isSupabaseConfigured ? [] : readStored(OVERRIDES_KEY, INITIAL_OVERRIDES),
+  )
 
   const [editTarget, setEditTarget] = useState<AvailEditTarget | null>(null)
 
@@ -56,11 +58,18 @@ export function useAvailability() {
   const [timetablePosition, setTimetablePosition] = useState(
     initialTimetablePosition,
   )
-  const [loadedFromServer, setLoadedFromServer] = useState(false)
   const [error, setError] = useState("")
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !user) return
+    if (!isSupabaseConfigured) return
+
+    // Clear the previous account's rows before the new ones arrive, so they are
+    // never rendered for the account that just signed in.
+    setRecurringEntries([])
+    setOverrides([])
+    setError("")
+
+    if (!userId) return
 
     let active = true
     if (isMemberApiConfigured) {
@@ -79,7 +88,6 @@ export function useAvailability() {
           startTime: entry.startTime?.slice(0, 5),
           endTime: entry.endTime?.slice(0, 5),
         })))
-        setLoadedFromServer(true)
         setError("")
       }).catch(reason => {
         if (!active) return
@@ -94,13 +102,18 @@ export function useAvailability() {
       supabase
         .from("member_recurring_availability")
         .select("id, days, start_time, end_time")
-        .eq("user_id", user.id),
+        .eq("user_id", userId),
       supabase
         .from("member_availability_overrides")
         .select("id, override_date, override_type, start_time, end_time")
-        .eq("user_id", user.id),
+        .eq("user_id", userId),
     ]).then(([recurring, overrides]) => {
-      if (!active || recurring.error || overrides.error) return
+      if (!active) return
+      const failure = recurring.error ?? overrides.error
+      if (failure) {
+        setError(failure.message || "Unable to load availability.")
+        return
+      }
       setRecurringEntries(
         (recurring.data ?? []).map((entry) => ({
           id: entry.id,
@@ -118,23 +131,30 @@ export function useAvailability() {
           endTime: entry.end_time?.slice(0, 5),
         })),
       )
-      setLoadedFromServer(true)
+      setError("")
     })
 
     return () => {
       active = false
     }
-  }, [user])
+  }, [userId])
 
   useEffect(() => {
-    if (!loadedFromServer && isSupabaseConfigured && user) return
+    if (isSupabaseConfigured) {
+      // Drop any copy left by an older build now that the server owns this data.
+      window.localStorage.removeItem(RECURRING_KEY)
+      return
+    }
     window.localStorage.setItem(RECURRING_KEY, JSON.stringify(recurringEntries))
-  }, [loadedFromServer, recurringEntries, user])
+  }, [recurringEntries])
 
   useEffect(() => {
-    if (!loadedFromServer && isSupabaseConfigured && user) return
+    if (isSupabaseConfigured) {
+      window.localStorage.removeItem(OVERRIDES_KEY)
+      return
+    }
     window.localStorage.setItem(OVERRIDES_KEY, JSON.stringify(overrides))
-  }, [loadedFromServer, overrides, user])
+  }, [overrides])
 
   return {
     recurringEntries,

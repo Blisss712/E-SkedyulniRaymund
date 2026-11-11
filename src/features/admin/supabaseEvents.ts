@@ -50,7 +50,7 @@ function toIso(value: string): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
 
-export function eventFromRow(row: EventRow): AdminEvent {
+function eventFromRow(row: EventRow): AdminEvent {
   return {
     id: row.id,
     organizationId: row.organization_id,
@@ -69,7 +69,7 @@ export function eventFromRow(row: EventRow): AdminEvent {
       row.status === "published" || row.status === "cancelled" || row.status === "completed"
         ? row.status
         : "draft",
-    createdAt: (row.created_at ?? "").slice(0, 10),
+    createdAt: toLocalInput(row.created_at).slice(0, 10),
   }
 }
 

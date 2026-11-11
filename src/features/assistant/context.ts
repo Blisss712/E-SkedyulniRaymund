@@ -99,7 +99,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 /** Parses the app's wall-clock values as Asia/Manila time, not the browser's zone. */
-export function parseManila(value: string | null | undefined): Date | null {
+function parseManila(value: string | null | undefined): Date | null {
   if (!value) return null
   const trimmed = value.trim()
   if (!trimmed) return null
@@ -120,7 +120,7 @@ function dateKey(date: Date): string {
 }
 
 /** "Sat, Nov 14, 2026, 5:00 PM–7:00 PM" (or a cross-midnight range). */
-export function eventTimeLabel(event: AdminEvent): string {
+function eventTimeLabel(event: AdminEvent): string {
   const start = parseManila(event.startsAt)
   const end = parseManila(event.endsAt)
   if (!start) return "date to be announced"
@@ -196,7 +196,9 @@ export async function buildSnapshot(
       (event) =>
         event.status === "published" &&
         joinedIds.has(event.organizationId) &&
-        (event.startsAt ?? "").slice(0, 10) >= today,
+        // A multi-day event that started earlier is still upcoming until its
+        // last day, so compare the end date rather than the start.
+        (event.endsAt || event.startsAt || "").slice(0, 10) >= today,
     )
     .sort((a, b) => (a.startsAt ?? "").localeCompare(b.startsAt ?? ""))
     .slice(0, 40)

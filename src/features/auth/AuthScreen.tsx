@@ -121,11 +121,6 @@ export function AuthScreen({
     setErrorCode("")
     setInfoMessage("")
 
-    if (phoneStep === "code") {
-      await handleVerifyCode(e)
-      return
-    }
-
     if (!email.trim() || !password) {
       setError("Please provide both email and password.")
       return
@@ -185,10 +180,13 @@ export function AuthScreen({
   }
 
   async function handleSendCode() {
+    if (phoneLoading) return
     setError("")
     setPhoneError("")
     setInfoMessage("")
+    setPhoneLoading(true)
     const res = await signInWithPhone(phone)
+    setPhoneLoading(false)
     if (!res.ok) {
       setPhoneError(res.error || "Unable to send the verification code.")
       return
@@ -253,6 +251,7 @@ export function AuthScreen({
           <button
             type="button"
             onClick={() => switchTab("signin")}
+            aria-pressed={tab === "signin"}
             className={`flex-1 rounded-lg py-2.5 text-center text-sm font-bold transition-all cursor-pointer ${
               tab === "signin"
                 ? "bg-white text-[#1B3A6B] shadow-sm"
@@ -264,6 +263,7 @@ export function AuthScreen({
           <button
             type="button"
             onClick={() => switchTab("signup")}
+            aria-pressed={tab === "signup"}
             className={`flex-1 rounded-lg py-2.5 text-center text-sm font-bold transition-all cursor-pointer ${
               tab === "signup"
                 ? "bg-white text-[#1B3A6B] shadow-sm"

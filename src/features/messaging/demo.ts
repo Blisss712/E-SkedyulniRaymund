@@ -42,8 +42,10 @@ const DEMO_JOINED_AT: Record<string, string> = {
 
 let demoPostingMode: ChatPostingMode = "everyone"
 const demoMuted = new Set<string>()
+/** Demo conversations the member has already opened in this session. */
+const demoRead = new Set<string>()
 
-export const DEMO_PEOPLE: ChatPerson[] = [
+const DEMO_PEOPLE: ChatPerson[] = [
   {
     userId: "demo-maria",
     fullName: "Maria Santos",
@@ -250,6 +252,10 @@ export function appendDemoMessage(
   return message
 }
 
+export function markDemoConversationRead(conversationId: string): void {
+  demoRead.add(conversationId)
+}
+
 export function readDemoConversations(): ChatConversation[] {
   return BASE_CONVERSATIONS.map(conversation => {
     const messages = readDemoMessages(conversation.id)
@@ -258,6 +264,7 @@ export function readDemoConversations(): ChatConversation[] {
       ...conversation,
       lastMessage: last?.body ?? conversation.lastMessage,
       lastMessageAt: last?.createdAt ?? conversation.lastMessageAt,
+      unreadCount: demoRead.has(conversation.id) ? 0 : conversation.unreadCount,
     }
   }).sort((a, b) => (b.lastMessageAt ?? "").localeCompare(a.lastMessageAt ?? ""))
 }

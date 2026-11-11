@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react"
+
 import { Button } from "../../shared/ui"
 import type {
   ChatConversation,
@@ -162,6 +164,20 @@ function Sheet({
   onClose: () => void
   children: React.ReactNode
 }) {
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    panelRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [onClose])
+
   return (
     <div
       className="fixed inset-0 z-[60] flex items-end justify-center sm:items-center sm:p-6"
@@ -174,7 +190,11 @@ function Sheet({
         onClick={onClose}
         aria-hidden="true"
       />
-      <div className="relative flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl bg-white text-[#1A202C] shadow-2xl sm:rounded-3xl">
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="relative flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl bg-white text-[#1A202C] shadow-2xl outline-none sm:rounded-3xl"
+      >
         {children}
       </div>
     </div>

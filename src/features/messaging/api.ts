@@ -3,6 +3,7 @@ import {
   appendDemoMessage,
   demoConversationSettings,
   demoParticipants,
+  markDemoConversationRead,
   readDemoConversations,
   readDemoMessages,
   searchDemoPeople,
@@ -318,11 +319,12 @@ export async function fetchMessages(
     .from("chat_messages")
     .select("id, conversation_id, sender_id, body, created_at")
     .eq("conversation_id", conversationId)
-    .order("created_at", { ascending: true })
+    // Read the newest page, then reverse it for the oldest-to-newest transcript.
+    .order("created_at", { ascending: false })
     .limit(300)
 
   if (error) throw fromSupabase(error, "Unable to load this conversation.")
-  return ((data ?? []) as MessageRow[]).map(messageFromRow)
+  return ((data ?? []) as MessageRow[]).reverse().map(messageFromRow)
 }
 
 export async function sendMessage(
@@ -356,7 +358,10 @@ export async function sendMessage(
 export async function markConversationRead(
   conversationId: string,
 ): Promise<void> {
-  if (!isSupabaseConfigured) return
+  if (!isSupabaseConfigured) {
+    markDemoConversationRead(conversationId)
+    return
+  }
 
   const { error } = await supabase.rpc("mark_conversation_read", {
     p_conversation_id: conversationId,

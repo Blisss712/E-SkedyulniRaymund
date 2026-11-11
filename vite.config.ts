@@ -11,13 +11,13 @@ import tailwindcss from "@tailwindcss/vite"
 
 import path from "node:path"
 
-import siteConfiguration from "./.figma/make/site.json"
+import siteConfiguration from "./.figma/make/site.json" with { type: "json" }
 
 import {
   assistantEnv,
   assistantResponse,
   type AssistantEnv,
-} from "./server/assistant"
+} from "./server/assistant.ts"
 
 // Vite config — https://vitejs.dev/config/
 
@@ -60,7 +60,7 @@ export default defineConfig(({ mode }) => {
 
     resolve: {
       alias: {
-        "@": path.resolve(__dirname, "./src"),
+        "@": path.resolve(import.meta.dirname, "./src"),
       },
     },
 
@@ -69,7 +69,11 @@ export default defineConfig(({ mode }) => {
 
       port: parseInt(process.env.PORT || "8443"),
 
-      strictPort: true,
+      // Keep `npm run dev` usable even when the preview server already holds
+      // PORT (the harness starts its own Vite with --strictPort on 8443).
+      // Without this, a second `npm run dev` exits with "Port is already in use"
+      // instead of simply moving up to the next free port.
+      strictPort: process.env.VITE_STRICT_PORT === "true",
 
       watch: {
         // `.figma/**` is platform state, and the `*.tmpdir` folders are

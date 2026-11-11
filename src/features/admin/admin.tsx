@@ -37,6 +37,15 @@ import type {
 import type { TimetablePosition } from "../availability/types"
 
 export type AdminSection = "dashboard" | "organizations" | "events" | "requests" | "coordinators" | "messages"
+
+/** Formats a stored `YYYY-MM-DD` at midday so no timezone shifts the day. */
+function formatCreatedDate(value: string) {
+  if (!value) return "recently"
+  const date = new Date(`${value}T12:00:00`)
+  if (Number.isNaN(date.getTime())) return "recently"
+  return new Intl.DateTimeFormat("en-PH", { dateStyle: "medium" }).format(date)
+}
+
 type AdminSectionItem = { value: AdminSection; label: string; short: string }
 const ADMIN_SECTIONS: AdminSectionItem[] = [
   { value: "dashboard", label: "Dashboard", short: "Home" },
@@ -60,7 +69,7 @@ const COORDINATOR_SECTIONS: AdminSectionItem[] = [
 ]
 
 /** Who is using the workspace: a full administrator or a ministry coordinator. */
-export type AdminWorkspaceRole = "admin" | "leader"
+type AdminWorkspaceRole = "admin" | "leader"
 type AdminView =
   | { name: "section"; section: AdminSection }
   | { name: "organization"; id: string }
@@ -206,7 +215,9 @@ function Dashboard({ admin, requests, onEvents, onTimeline, onOpenOrganization, 
 }) {
   const now = new Date()
   const nextEvents = admin.events
-    .filter(event => event.status === "published" && new Date(event.startsAt) > now)
+    // Include an event that is already running (a multi-day event whose start
+    // has passed) until its final end time.
+    .filter(event => event.status === "published" && new Date(event.endsAt) > now)
     .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
     .slice(0, 4)
 
@@ -500,7 +511,7 @@ function JoinRequestList({ requests, organizations, scoped, onApprove, onReject 
           />
           <div>
             <p className="mb-2 text-sm font-semibold text-text">Status</p>
-            <div className="flex flex-wrap rounded-xl bg-bg p-1">
+            <div className="flex flex-wrap rounded-xl bg-bg p-1" role="group" aria-label="Request status">
               {(["pending", "approved", "rejected", "all"] as const).map(value => (
                 <Button
                   key={value}
@@ -508,6 +519,7 @@ function JoinRequestList({ requests, organizations, scoped, onApprove, onReject 
                   size="compact"
                   fullWidth={false}
                   onClick={() => setFilter(value)}
+                  ariaPressed={filter === value}
                   className="capitalize"
                 >
                   {value === "all" ? "All" : value} ({statusCounts[value]})
@@ -700,7 +712,7 @@ function OrganizationList({ admin, requests, onCreate, onOpen, scoped }: {
           />
           <div>
             <p className="mb-2 text-sm font-semibold text-text">Status</p>
-            <div className="flex rounded-xl bg-bg p-1">
+            <div className="flex rounded-xl bg-bg p-1" role="group" aria-label="Organization status">
               {(["all", "active", "inactive"] as const).map(value => (
                 <Button
                   key={value}
@@ -708,6 +720,7 @@ function OrganizationList({ admin, requests, onCreate, onOpen, scoped }: {
                   size="compact"
                   fullWidth={false}
                   onClick={() => setStatus(value)}
+                  ariaPressed={status === value}
                   className="min-h-10 capitalize"
                 >
                   {value}
@@ -717,9 +730,9 @@ function OrganizationList({ admin, requests, onCreate, onOpen, scoped }: {
           </div>
           <div>
             <p className="mb-2 text-sm font-semibold text-text">Sort</p>
-            <div className="flex rounded-xl bg-bg p-1">
-              <Button variant={sort === "name" ? "tabActive" : "tabInactive"} size="compact" fullWidth={false} onClick={() => setSort("name")} className="min-h-10">A–Z</Button>
-              <Button variant={sort === "newest" ? "tabActive" : "tabInactive"} size="compact" fullWidth={false} onClick={() => setSort("newest")} className="min-h-10">Newest</Button>
+            <div className="flex rounded-xl bg-bg p-1" role="group" aria-label="Sort organizations">
+              <Button variant={sort === "name" ? "tabActive" : "tabInactive"} size="compact" fullWidth={false} onClick={() => setSort("name")} ariaPressed={sort === "name"} className="min-h-10">A–Z</Button>
+              <Button variant={sort === "newest" ? "tabActive" : "tabInactive"} size="compact" fullWidth={false} onClick={() => setSort("newest")} ariaPressed={sort === "newest"} className="min-h-10">Newest</Button>
             </div>
           </div>
         </div>
@@ -812,7 +825,7 @@ function OrganizationDetails({ organization, admin, onBack, onEdit, onCreateEven
       <AdminHeader
         eyebrow={scoped ? "Coordination" : "Administration"}
         title={organization.name}
-        description={`${organization.category} · Created ${new Intl.DateTimeFormat("en-PH", { dateStyle: "medium" }).format(new Date(organization.createdAt))}`}
+        description={`${organization.category} · Created ${formatCreatedDate(organization.createdAt)}`}
         action={<StatusBadge status={organization.status} />}
       />
       <div className="grid gap-6 lg:grid-cols-3">
@@ -1029,8 +1042,9 @@ function EventList({ admin, onCreate, onCreateForOrganization, onEdit, scoped, v
   }
 
   function duplicate(id: string) {
-    const nextId = admin.duplicateEvent(id)
-    if (nextId) onEdit(nextId)
+    void admin.duplicateEvent(id).then(nextId => {
+      if (nextId) onEdit(nextId)
+    })
   }
 
   function cancel(id: string) {
@@ -1063,7 +1077,7 @@ function EventList({ admin, onCreate, onCreateForOrganization, onEdit, scoped, v
           />
           <div>
             <p className="mb-2 text-sm font-semibold text-text">Status</p>
-            <div className="flex flex-wrap rounded-xl bg-bg p-1">
+            <div className="flex flex-wrap rounded-xl bg-bg p-1" role="group" aria-label="Event status">
               {(["all", "draft", "published", "cancelled", "completed"] as const).map(value => (
                 <Button
                   key={value}
@@ -1071,6 +1085,7 @@ function EventList({ admin, onCreate, onCreateForOrganization, onEdit, scoped, v
                   size="compact"
                   fullWidth={false}
                   onClick={() => setStatus(value)}
+                  ariaPressed={status === value}
                   className="min-h-10 capitalize"
                 >
                   {value}
@@ -1278,9 +1293,14 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved, scoped }
    */
   function updateSchedule(patch: Partial<EventSchedule>) {
     const next: EventSchedule = { ...schedule, ...patch }
-    // Keep a new event's end date in step with its start date until the
-    // coordinator picks one explicitly.
-    if (patch.startDate && !next.endDate) next.endDate = patch.startDate
+    // Keep a single-day event's end date in step with its start date. If the
+    // coordinator picked a later end date explicitly, keep it; only move it
+    // when the new start would make the range invalid.
+    if (patch.startDate) {
+      if (!next.endDate || next.endDate < patch.startDate) {
+        next.endDate = patch.startDate
+      }
+    }
     setSchedule(next)
     setForm(current => ({
       ...current,
@@ -1302,7 +1322,7 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved, scoped }
     }
     const startsAt = combineDateTime(schedule.startDate, schedule.startTime)
     const endsAt = combineDateTime(schedule.endDate, schedule.endTime)
-    if (form.registrationDeadline && new Date(form.registrationDeadline) > new Date(startsAt)) {
+    if (form.registrationDeadline && new Date(form.registrationDeadline) >= new Date(startsAt)) {
       setError("Registration must close before the event starts.")
       return
     }
@@ -1310,7 +1330,17 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved, scoped }
       setError("Capacity must be at least 1.")
       return
     }
-    const result = admin.saveEvent({ ...form, startsAt, endsAt, status }, initial?.id)
+    const result = admin.saveEvent(
+      {
+        ...form,
+        startsAt,
+        endsAt,
+        // A non-recurring event must not keep the hidden repeat-until value.
+        repeatUntil: form.recurrence === "none" ? "" : form.repeatUntil,
+        status,
+      },
+      initial?.id,
+    )
     if (!result.ok) {
       setError(result.message || "Unable to save the event.")
       return
@@ -1524,7 +1554,16 @@ export function AdminScreen({
         onCancel={() => openSection("organizations")}
         onSave={(draft, id) => {
           const result = admin.saveOrganization(draft, id)
-          if (result.ok && result.id) setView({ name: "organization", id: result.id })
+          if (result.ok) {
+            // Editing keeps the same id, so its details can reopen immediately.
+            // A newly created row may be assigned its id by the optional API,
+            // so return to the list instead of opening an id that may not exist.
+            setView(
+              id && result.id
+                ? { name: "organization", id: result.id }
+                : { name: "section", section: "organizations" },
+            )
+          }
           return result
         }}
       />
@@ -1540,7 +1579,15 @@ export function AdminScreen({
         onEdit={() => setView({ name: "organization-form", id: organization.id })}
         onCreateEvent={() => setView({ name: "event-form", organizationId: organization.id })}
       />
-    ) : null
+    ) : (
+      <div className="mx-auto max-w-2xl space-y-6">
+        <BackButton onClick={() => openSection("organizations")} label="Back to organizations" className="" />
+        <p className="rounded-2xl border border-dashed border-border bg-white px-5 py-10 text-center text-sm leading-relaxed text-muted">
+          This organization is no longer available. It may have been deleted in
+          another session. Return to the list to see the current ministries.
+        </p>
+      </div>
+    )
   } else if (view.name === "event-form") {
     const initial = view.id ? admin.events.find(event => event.id === view.id) : undefined
     content = (

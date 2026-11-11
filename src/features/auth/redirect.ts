@@ -71,7 +71,7 @@ function describeAuthFailure(code: string, description: string): string {
 }
 
 /** Reads the OAuth failure carried by the URL, if there is one. */
-export function readAuthRedirectFailure(
+function readAuthRedirectFailure(
   search: string,
   hash: string,
 ): AuthRedirectFailure | null {

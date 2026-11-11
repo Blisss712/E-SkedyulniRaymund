@@ -81,7 +81,9 @@ function isEndNotAfterStart(start: string, end: string): boolean {
 function addMinutes(time: string, minutes: number): string {
   const [hour, minute] = time.split(":").map(Number)
 
-  const total = hour * 60 + minute + minutes
+  // A block that would run past midnight stops at 23:59: the timetable has no
+  // "24:xx" row, and the block's real end is not needed for display.
+  const total = Math.min(hour * 60 + minute + minutes, 23 * 60 + 59)
 
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`
 }
@@ -103,14 +105,21 @@ function availabilityEvents(
   onViewSlot: (slot: Slot) => void,
 ): TimetableEvent[] {
   const events: TimetableEvent[] = []
+  // A one-time "not available" date overrides the weekly pattern for that
+  // specific day, so its normal "Available" blocks must not also be emitted.
+  const blockedDates = new Set(
+    overrides.filter((entry) => entry.type === "blocked").map((entry) => entry.date),
+  )
 
   for (const entry of recurring) {
     for (const day of entry.days) {
       // DAYS_ORDER starts on Sunday; the timetable starts on Monday (0 = Monday … 6 = Sunday).
+      const dayIndex = (DAYS_ORDER.indexOf(day) + 6) % 7
+      if (blockedDates.has(localDateKey(addDaysTo(weekStart, dayIndex)))) continue
 
       events.push({
         id: `${entry.id}-${day}`,
-        day: (DAYS_ORDER.indexOf(day) + 6) % 7,
+        day: dayIndex,
 
         start: entry.startTime,
         end: entry.endTime,
@@ -323,6 +332,9 @@ function TimePicker({
         <div
           className="fixed inset-0 z-50 flex flex-col justify-end"
           data-closing={closing}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${label} picker`}
         >
           <div
             className="sheet-backdrop absolute inset-0 bg-black/50"
@@ -344,6 +356,7 @@ function TimePicker({
                     <button
                       key={h}
                       onClick={() => setSelHour(h)}
+                      aria-pressed={selHour === h}
                       className={`w-full min-h-[52px] rounded-xl text-[20px] font-bold transition-all ${
                         selHour === h
                           ? "bg-[#1B3A6B] text-white shadow-sm"
@@ -364,6 +377,7 @@ function TimePicker({
                     <button
                       key={m}
                       onClick={() => setSelMinute(m)}
+                      aria-pressed={selMinute === m}
                       className={`w-full min-h-[52px] rounded-xl text-[20px] font-bold transition-all ${
                         selMinute === m
                           ? "bg-[#1B3A6B] text-white shadow-sm"
@@ -384,6 +398,7 @@ function TimePicker({
                     <button
                       key={p}
                       onClick={() => setSelPeriod(p)}
+                      aria-pressed={selPeriod === p}
                       className={`w-full min-h-[52px] rounded-xl text-[20px] font-bold transition-all ${
                         selPeriod === p
                           ? "bg-[#1B3A6B] text-white shadow-sm"
@@ -491,10 +506,21 @@ function ConfirmRemoveModal({
 }) {
   const { closing, close } = useSheetClose()
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") close(onCancel)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [])
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end justify-center"
       data-closing={closing}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="remove-availability-title"
     >
       <div
         className="sheet-backdrop absolute inset-0 bg-black/50"
@@ -503,7 +529,7 @@ function ConfirmRemoveModal({
       />
       <div className="sheet-panel relative bg-white rounded-t-3xl px-6 pt-6 pb-10 w-full max-w-lg shadow-2xl">
         <div className="w-10 h-1.5 bg-[#D1D9E8] rounded-full mx-auto mb-5" />
-        <h3 className="text-[19px] font-bold text-[#1A202C] mb-3">
+        <h3 id="remove-availability-title" className="text-[19px] font-bold text-[#1A202C] mb-3">
           Remove this availability?
         </h3>
         <p className="text-[#64748B] text-[16px] leading-relaxed mb-6">
@@ -1212,7 +1238,7 @@ export function AddOverrideScreen({
   onSave: (e: OneTimeOverride) => Promise<{ ok: boolean; message?: string }>
   onBack: () => void
 }) {
-  const today = new Date().toISOString().split("T")[0]
+  const today = localDateKey(new Date())
 
   const [date, setDate] = useState(initial?.date ?? today)
 

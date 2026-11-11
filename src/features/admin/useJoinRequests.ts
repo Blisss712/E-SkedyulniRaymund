@@ -16,8 +16,13 @@ import {
   reviewJoinRequest,
 } from "../organizations/api"
 
+let requestSequence = 0
+
 function makeId() {
-  return `request-${Date.now().toString(36)}`
+  // Several requests can be created in the same millisecond (one per ticked
+  // ministry), so the timestamp alone is not unique.
+  requestSequence += 1
+  return `request-${Date.now().toString(36)}-${requestSequence}`
 }
 
 const STORAGE_KEY = "e-skedyul.join-requests"
@@ -145,6 +150,14 @@ export function useJoinRequests() {
       }
     }
 
+    // With a backend connected the request must be written there. Falling back
+    // to an in-memory row would report success for something never sent.
+    if (remoteRequests) {
+      const message = "Sign in again to submit a join request."
+      setApiError(message)
+      throw new Error(message)
+    }
+
     const request: JoinRequest = {
       ...input,
       id: makeId(),
@@ -173,6 +186,11 @@ export function useJoinRequests() {
       void reviewJoinRequest(id, status, user.id, { coordinator: isCoordinator })
         .then(saved => replace(id, saved))
         .catch(reason => failUpdate(reason))
+    } else if (remoteRequests) {
+      // The row was updated optimistically above, but no backend call was made.
+      // Put the server's version back and explain why.
+      setApiError("Sign in again to review this join request.")
+      void pull().catch(() => undefined)
     }
   }
 

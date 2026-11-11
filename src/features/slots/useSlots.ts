@@ -23,21 +23,31 @@ function readSlots() {
 
 export function useSlots() {
   const { user } = useAuth()
-  const [slots, setSlots] = useState<Slot[]>(readSlots)
+  const userId = user?.id ?? ""
+  // With a database connected the server owns the slots, so the browser keeps
+  // no per-account copy. Local storage is only the offline demo's store.
+  const [slots, setSlots] = useState<Slot[]>(() =>
+    isSupabaseConfigured ? [] : readSlots(),
+  )
 
   const [activeSlot, setActiveSlot] = useState<Slot | null>(null)
-  const [serverBacked, setServerBacked] = useState(false)
   const [error, setError] = useState("")
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !user) return
+    if (!isSupabaseConfigured) return
+
+    // Clear the previous account's slots before the new ones arrive.
+    setSlots([])
+    setActiveSlot(null)
+    setError("")
+
+    if (!userId) return
 
     let active = true
     if (isMemberApiConfigured) {
       void memberApi.getSlots().then(savedSlots => {
         if (!active) return
         setSlots(savedSlots)
-        setServerBacked(true)
         setError("")
       }).catch(reason => {
         if (!active) return
@@ -56,13 +66,18 @@ export function useSlots() {
         .order("slot_time"),
       supabase.from("slot_signups").select("slot_id, user_id"),
     ]).then(([slotResult, signupResult]) => {
-      if (!active || slotResult.error || signupResult.error) return
+      if (!active) return
+      const failure = slotResult.error ?? signupResult.error
+      if (failure) {
+        setError(failure.message || "Unable to load volunteer slots.")
+        return
+      }
       const signups = signupResult.data ?? []
       setSlots(
         (slotResult.data ?? []).map((slot) => {
           const count = signups.filter((signup) => signup.slot_id === slot.id).length
           const serving = signups.some(
-            (signup) => signup.slot_id === slot.id && signup.user_id === user.id,
+            (signup) => signup.slot_id === slot.id && signup.user_id === userId,
           )
           return {
             id: slot.id,
@@ -82,18 +97,22 @@ export function useSlots() {
           }
         }),
       )
-      setServerBacked(true)
+      setError("")
     })
 
     return () => {
       active = false
     }
-  }, [user])
+  }, [userId])
 
   useEffect(() => {
-    if (isSupabaseConfigured && user && !serverBacked) return
+    if (isSupabaseConfigured) {
+      // Drop any copy left by an older build now that the server owns this data.
+      window.localStorage.removeItem(SLOTS_KEY)
+      return
+    }
     window.localStorage.setItem(SLOTS_KEY, JSON.stringify(slots))
-  }, [serverBacked, slots, user])
+  }, [slots])
 
   return {
     slots,

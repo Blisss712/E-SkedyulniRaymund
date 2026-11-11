@@ -25,8 +25,12 @@ function makeId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}`
 }
 
+/** A local `YYYY-MM-DD` key, so "created today" does not become yesterday in UTC+8. */
 function today() {
-  return new Date().toISOString().slice(0, 10)
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, "0")
+  const day = String(now.getDate()).padStart(2, "0")
+  return `${now.getFullYear()}-${month}-${day}`
 }
 
 /**
@@ -277,7 +281,12 @@ export function useAdmin(scope: AdminScope = {}) {
     return { ok: true, id: next.id }
   }
 
-  function duplicateEvent(id: string) {
+  /**
+   * Copies an event and resolves with the id the saved row actually has. The
+   * optional API assigns its own id, so callers must not assume the temporary
+   * one survives; the duplicate's edit form needs the real id.
+   */
+  async function duplicateEvent(id: string): Promise<string | null> {
     const source = events.find(event => event.id === id)
     if (!source || !inScope(source.organizationId)) return null
     const duplicate: AdminEvent = {
@@ -288,20 +297,35 @@ export function useAdmin(scope: AdminScope = {}) {
       createdAt: today(),
     }
     setEvents(current => [duplicate, ...current])
+
     if (useRemoteApi) {
-      void adminApi.duplicateEvent(id)
-        .then(saved => replaceEvent(duplicate.id, saved))
-        .catch(reportFailure)
-        .finally(notifyEventsChanged)
-    } else if (isSupabaseConfigured) {
-      const { id: _sourceId, createdAt: _createdAt, ...draft } = duplicate
-      void createEventRow(duplicate.id, draft)
-        .then(saved => replaceEvent(duplicate.id, saved))
-        .catch(reportFailure)
-        .finally(notifyEventsChanged)
-    } else {
-      notifyEventsChanged()
+      try {
+        const saved = await adminApi.duplicateEvent(id)
+        replaceEvent(duplicate.id, saved)
+        return saved.id
+      } catch (reason) {
+        reportFailure(reason)
+        return null
+      } finally {
+        notifyEventsChanged()
+      }
     }
+
+    if (isSupabaseConfigured) {
+      const { id: _sourceId, createdAt: _createdAt, ...draft } = duplicate
+      try {
+        const saved = await createEventRow(duplicate.id, draft)
+        replaceEvent(duplicate.id, saved)
+        return saved.id
+      } catch (reason) {
+        reportFailure(reason)
+        return null
+      } finally {
+        notifyEventsChanged()
+      }
+    }
+
+    notifyEventsChanged()
     return duplicate.id
   }
 
@@ -363,7 +387,9 @@ export function useAdmin(scope: AdminScope = {}) {
     activeOrganizations: visibleOrganizations.filter(organization => organization.status === "active").length,
     publishedEvents: visibleEvents.filter(event => event.status === "published").length,
     draftEvents: visibleEvents.filter(event => event.status === "draft").length,
-    upcomingEvents: visibleEvents.filter(event => event.status === "published" && new Date(event.startsAt) > new Date()).length,
+    // An event that is already running stays "upcoming" until it ends, which
+    // matters for events that span several days.
+    upcomingEvents: visibleEvents.filter(event => event.status === "published" && new Date(event.endsAt) > new Date()).length,
   }), [visibleEvents, visibleOrganizations])
 
   return {

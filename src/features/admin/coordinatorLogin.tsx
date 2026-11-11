@@ -4,7 +4,7 @@ import { useAuth } from "../auth/AuthContext"
 import type { AuthErrorCode, SocialProvider, UserProfile } from "../auth/types"
 import { isSupabaseConfigured } from "../../lib/supabase"
 import { FacebookIcon, GoogleIcon } from "../auth/providerIcons"
-import { rememberWorkspaceIntent } from "../auth/redirect"
+import { rememberWorkspaceIntent, takeWorkspaceIntent } from "../auth/redirect"
 
 /** Which step of the phone sign-in is showing, if any. */
 type PhoneStep = "idle" | "phone" | "code"
@@ -153,6 +153,9 @@ export function CoordinatorLoginScreen({ onBack, onAuthenticated, onAdmin, onFor
     rememberWorkspaceIntent("coordinator")
     const result = await signInWithProvider(provider)
     if (!result.ok) {
+      // The provider never left this page, so the pending workspace choice is
+      // abandoned; do not let it redirect a later sign-in.
+      takeWorkspaceIntent()
       setSocialLoading(null)
       setError(
         result.error ||

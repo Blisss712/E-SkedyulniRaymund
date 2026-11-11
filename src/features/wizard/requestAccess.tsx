@@ -14,12 +14,12 @@ const CHECK = "\u2713"
  */
 
 /** Stable identity for an option; the offline demo list has no organization id. */
-export function ministryKey(option: MinistryOption) {
+function ministryKey(option: MinistryOption) {
   return option.id ?? `name:${option.name}`
 }
 
 /** True when the member already ticked this ministry. */
-export function isMinistrySelected(
+function isMinistrySelected(
   selected: MinistryOption[],
   option: MinistryOption,
 ) {
