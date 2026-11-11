@@ -23,6 +23,19 @@ import { fetchMyLeaderships, type LeaderMinistry } from "../organizations/leader
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
+export const DEMO_MEMBER_ID = "demo-juan"
+export const DEMO_MEMBER_USERNAME = "juan"
+export const DEMO_MEMBER_PASSWORD = "juan123"
+
+const DEMO_MEMBER_USER: User = {
+  id: DEMO_MEMBER_ID,
+  app_metadata: {},
+  user_metadata: { full_name: "Juan dela Cruz", onboarded: true },
+  aud: "authenticated",
+  created_at: "2026-01-01T00:00:00.000Z",
+  email: "juan@example.org",
+}
+
 /**
  * A project that has not run supabase/organization_leaders.sql has no
  * appointments table. That is not an error the member can act on, so it is
@@ -436,10 +449,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     password: string,
   ): Promise<AuthResult> {
     if (!isSupabaseConfigured) {
+      if (
+        email.trim().toLowerCase() === DEMO_MEMBER_USERNAME &&
+        password === DEMO_MEMBER_PASSWORD
+      ) {
+        const demoProfile: UserProfile = {
+          id: DEMO_MEMBER_ID,
+          email: DEMO_MEMBER_USER.email ?? "juan@example.org",
+          fullName: "Juan dela Cruz",
+          role: "member",
+          active: true,
+          onboarded: true,
+          leaderOrganizations: [],
+        }
+        setUser(DEMO_MEMBER_USER)
+        setSession(null)
+        setProfile(demoProfile)
+        return { ok: true, profile: demoProfile }
+      }
+
       return {
         ok: false,
-        code: "unavailable",
-        error: "Authentication is not configured. Add the Supabase environment variables.",
+        error: "The username or password is incorrect.",
       }
     }
 

@@ -27,7 +27,7 @@ const DEMO_ROLES: Record<string, ChatRole> = {
 const DEMO_SHARED_ORGANIZATIONS: Record<string, string[]> = {
   [DEMO_ME_ID]: ["Parish Music Ministry"],
   "demo-maria": ["Parish Music Ministry"],
-  "demo-juan": [],
+  "demo-juan": ["Altar Servers"],
   "demo-ana": ["Youth Ministry"],
   "demo-ramon": [],
 }
