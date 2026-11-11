@@ -60,6 +60,9 @@ export default function App() {
   /** Prefills the password screen when "Forgot password?" is clicked. */
   const [resetEmail, setResetEmail] = useState("")
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
+  // Whether the workspace was opened from the member dashboard (so it can go
+  // back there) or entered through a sign-in form (where signing out is the exit).
+  const [adminEntry, setAdminEntry] = useState<"login" | "home">("login")
   const [dashboardReturnScreen, setDashboardReturnScreen] = useState<"home" | "admin">("home")
   // The admin workspace is unmounted while a chat is open, so this remembers the
   // section it should reopen on return.
@@ -178,7 +181,8 @@ export default function App() {
    * The screen itself is role-aware: an administrator gets every section, a
    * coordinator only their own ministries and events.
    */
-  function enterWorkspace() {
+  function enterWorkspace(from: "login" | "home" = "login") {
+    setAdminEntry(from)
     setAdminAuthenticated(true)
     go("admin")
   }
@@ -195,7 +199,7 @@ export default function App() {
       go("home")
       return
     }
-    enterWorkspace()
+    enterWorkspace("home")
   }
 
   /** Opens the account screen on the requested tab (sign in or create account). */
@@ -254,6 +258,8 @@ export default function App() {
   dashboardReturnScreenRef.current = dashboardReturnScreen
   const isCoordinatorRef = useRef(isCoordinator)
   isCoordinatorRef.current = isCoordinator
+  const adminEntryRef = useRef(adminEntry)
+  adminEntryRef.current = adminEntry
   const closeChatRef = useRef(closeChat)
   closeChatRef.current = closeChat
   const goRef = useRef(go)
@@ -277,7 +283,7 @@ export default function App() {
     }
     // A coordinator's workspace is entered from their member dashboard, not
     // from the administrator sign-in screen.
-    if (current === "admin" && isCoordinatorRef.current) {
+    if (current === "admin" && (isCoordinatorRef.current || adminEntryRef.current === "home")) {
       goRef.current("home")
       return
     }
@@ -541,7 +547,10 @@ export default function App() {
           onOpenConversation={conversation => openChat(conversation, "admin")}
           initialSection={adminSection}
           onSectionChange={setAdminSection}
+          onBack={adminEntry === "home" ? () => go("home") : undefined}
+          backLabel="My dashboard"
           logoutLabel={isCoordinator ? "My member dashboard" : "Sign out"}
+          leaveIcon={isCoordinator ? "back" : "power"}
           onLogout={() => {
             setAdminAuthenticated(false)
             setAdminSection("dashboard")
@@ -580,6 +589,7 @@ export default function App() {
           lastName={wizard.lastName}
           setFirstName={wizard.setFirstName}
           setLastName={wizard.setLastName}
+          onBack={() => go("welcome")}
           onContinue={() => {
             // Persist the confirmed name right away: the dashboard, join
             // requests, and the next sign-in all read it from the profile.
@@ -693,7 +703,12 @@ export default function App() {
       ) : null
 
     case "slot-filled":
-      return <SlotFilledScreen onSeeOthers={() => go(dashboardReturnScreen)} />
+      return (
+        <SlotFilledScreen
+          onSeeOthers={() => go(dashboardReturnScreen)}
+          onBack={() => go(dashboardReturnScreen)}
+        />
+      )
 
     // ─── Messages ─────────────────────────────────────────────────────────────
     case "chat":

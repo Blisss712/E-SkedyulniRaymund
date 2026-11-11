@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { Button, InputField } from "../../shared/ui"
+import { BackButton, Button, InputField } from "../../shared/ui"
 import { useAdmin } from "./useAdmin"
 import { CoordinatorsSection } from "./coordinators"
 import { EventsTimeline } from "./eventsTimeline"
@@ -804,9 +804,11 @@ function OrganizationDetails({ organization, admin, onBack, onEdit, onCreateEven
 
   return (
     <div className="space-y-6">
-      <Button variant="ghost" size="compact" fullWidth={false} onClick={onBack}>
-        {scoped ? "Back to my ministries" : "Back to organizations"}
-      </Button>
+      <BackButton
+        onClick={onBack}
+        label={scoped ? "Back to my ministries" : "Back to organizations"}
+        className=""
+      />
       <AdminHeader
         eyebrow={scoped ? "Coordination" : "Administration"}
         title={organization.name}
@@ -941,7 +943,7 @@ function OrganizationForm({ initial, onCancel, onSave }: {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <Button variant="ghost" size="compact" fullWidth={false} onClick={onCancel}>Back to Organizations</Button>
+      <BackButton onClick={onCancel} label="Back to organizations" className="" />
       <AdminHeader
         title={initial ? "Edit organization" : "Create organization"}
         description="Keep the profile focused on the information needed to manage schedules and communication. Every new organization automatically gets a group chat for its members."
@@ -1318,7 +1320,7 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved, scoped }
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <Button variant="ghost" size="compact" fullWidth={false} onClick={onCancel}>Back to Events</Button>
+      <BackButton onClick={onCancel} label="Back to events" className="" />
       <AdminHeader
         eyebrow={scoped ? "Coordination" : "Administration"}
         title={initial ? "Edit event" : "Create event"}
@@ -1434,7 +1436,10 @@ function EventForm({ initial, organizationId, admin, onCancel, onSaved, scoped }
 
 export function AdminScreen({
   onLogout,
+  onBack,
+  backLabel = "My dashboard",
   logoutLabel = "Sign out",
+  leaveIcon = "power",
   adminName,
   requests,
   requestError,
@@ -1447,8 +1452,13 @@ export function AdminScreen({
   onSectionChange,
 }: {
   onLogout: () => void
+  /** Where the workspace goes back to, when it was opened from the member app. */
+  onBack?: () => void
+  backLabel?: string
   /** What leaving the workspace means: a sign out, or a coordinator's way back. */
   logoutLabel?: string
+  /** The icon for that action: a power button, or a back arrow for a coordinator. */
+  leaveIcon?: "power" | "back"
   adminName?: string
   requests: JoinRequest[]
   requestError?: string
@@ -1608,8 +1618,19 @@ export function AdminScreen({
   return (
     <div className="min-h-screen bg-bg text-text">
       <div className="sticky top-0 z-40 border-b border-white/10 bg-navy text-white shadow-sm lg:hidden">
-        <div className="flex items-center justify-between px-4 py-4">
-          <AdminBrand compact role={role} />
+        <div className="flex items-center justify-between gap-2 px-4 py-4">
+          <div className="flex min-w-0 items-center gap-2">
+            {onBack && (
+              <BackButton
+                onClick={onBack}
+                label={backLabel}
+                tone="dark"
+                iconOnly
+                className="shrink-0"
+              />
+            )}
+            <AdminBrand compact role={role} />
+          </div>
           <div className="flex items-center gap-1.5">
             <button
               type="button"
@@ -1653,26 +1674,51 @@ export function AdminScreen({
               title={logoutLabel}
               className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/25 text-white transition-colors hover:bg-white/10 sm:hidden"
             >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                className="h-5 w-5"
-                aria-hidden="true"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M15 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2v-2M10 12h10m0 0-3-3m3 3-3 3"
-                />
-              </svg>
+              {leaveIcon === "back" ? (
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  className="h-5 w-5"
+                  aria-hidden="true"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="m14.5 5.5-6 6.5 6 6.5"
+                  />
+                </svg>
+              ) : (
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  className="h-5 w-5"
+                  aria-hidden="true"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M15 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2v-2M10 12h10m0 0-3-3m3 3-3 3"
+                  />
+                </svg>
+              )}
             </button>
           </div>
         </div>
       </div>
       <div className="mx-auto flex min-h-screen max-w-screen-2xl">
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col bg-navy px-4 py-6 text-white lg:flex">
+          {onBack && (
+            <BackButton
+              onClick={onBack}
+              label={backLabel}
+              tone="dark"
+              className="mb-5 self-start"
+            />
+          )}
           <div className="px-3"><AdminBrand role={role} /></div>
           <div className="mx-3 mt-6 h-px bg-white/15" />
           <div className="mt-9 flex flex-1 flex-col gap-2">
