@@ -24,6 +24,14 @@ function formatSlotDateShort(dateStr: string): string {
   })
 }
 
+/** The local `YYYY-MM-DD` key, so "today" does not slip a day in UTC+8. */
+function todayKey() {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, "0")
+  const day = String(now.getDate()).padStart(2, "0")
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
 function groupSlotsByDate(slots: Slot[]): { date: string; slots: Slot[] }[] {
   const map = new Map<string, Slot[]>()
 
@@ -65,6 +73,9 @@ function SlotStatusPill({ status }: { status: SlotStatus }) {
 function SlotDetailCard({ slot }: { slot: Slot }) {
   return (
     <div className="border border-[#D1D9E8] rounded-2xl p-5 bg-white">
+      <p className="text-[#C9921A] text-[12px] font-bold uppercase tracking-widest mb-2">
+        {slot.eventId ? "Event volunteer slot" : "Volunteer slot"}
+      </p>
       <p className="text-[#64748B] text-[14px] font-medium mb-1">
         {formatSlotDate(slot.date)}
       </p>
@@ -72,6 +83,41 @@ function SlotDetailCard({ slot }: { slot: Slot }) {
         {slot.time}
       </p>
       <p className="text-[#64748B] text-[15px] leading-snug">{slot.massName}</p>
+    </div>
+  )
+}
+
+/** Filled spots as a bar; a slot can have more spots than a row of dots fits. */
+function SpotsMeter({ slot }: { slot: Slot }) {
+  const percent =
+    slot.totalSpots > 0
+      ? Math.min(100, Math.round((slot.filledSpots / slot.totalSpots) * 100))
+      : 0
+
+  return (
+    <div className="space-y-2">
+      <div
+        className="h-2.5 w-full overflow-hidden rounded-full bg-[#E8EDF7]"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={slot.totalSpots}
+        aria-valuenow={slot.filledSpots}
+        aria-label={`${slot.filledSpots} of ${slot.totalSpots} spots filled`}
+      >
+        <div
+          className="h-full rounded-full bg-[#1B3A6B] transition-all"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <p className="text-[#64748B] text-[15px]">
+        <span className="font-semibold text-[#1A202C]">
+          {slot.filledSpots} of {slot.totalSpots}
+        </span>{" "}
+        spots filled
+        {slot.totalSpots - slot.filledSpots === 1 && (
+          <span className="text-[#C9921A] font-semibold"> · Last spot!</span>
+        )}
+      </p>
     </div>
   )
 }
@@ -85,17 +131,23 @@ export function SlotList({
   slots: Slot[]
   onSlotTap: (slot: Slot) => void
 }) {
-  const grouped = groupSlotsByDate(slots)
+  // A slot is an invitation for an upcoming event, so once its day has passed
+  // it no longer belongs in "Open Slots" (the Availability timetable keeps the
+  // history of the shifts already served).
+  const today = todayKey()
+  const upcoming = slots.filter(slot => slot.date >= today)
+  const grouped = groupSlotsByDate(upcoming)
 
   return (
     <div>
       <p className="text-2xl font-extrabold text-[#1B3A6B]">Open Slots</p>
       <p className="mb-4 mt-1 text-[17px] leading-relaxed text-[#64748B]">
-        Upcoming slots you can volunteer for.
+        Upcoming volunteer slots opened for events, with the spots that are still
+        open.
       </p>
 
       <div className="overflow-hidden rounded-2xl border border-[#D1D9E8] bg-white">
-        {slots.length === 0 ? (
+        {upcoming.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 px-8 text-center gap-4">
             <div className="w-16 h-16 rounded-2xl bg-[#F4F6FB] flex items-center justify-center">
               <svg
@@ -124,11 +176,11 @@ export function SlotList({
               </svg>
             </div>
             <p className="text-[#1A202C] font-bold text-[18px]">
-              No slots scheduled yet
+              No upcoming slots scheduled
             </p>
             <p className="text-[#64748B] text-[15px] leading-relaxed">
-              Your group coordinator hasn't added any upcoming slots. Check back
-              soon.
+              Your group coordinator hasn't opened a volunteer slot for an upcoming
+              event yet. Check back soon.
             </p>
           </div>
         ) : (
@@ -139,47 +191,53 @@ export function SlotList({
                 <p className="text-[#64748B] text-[12px] font-bold uppercase tracking-widest pt-5 pb-2">
                   {formatSlotDateShort(date)}
                 </p>
-                {daySlots.map((slot) => (
-                  <button
-                    key={slot.id}
-                    onClick={() => onSlotTap(slot)}
-                    className={`w-full flex items-center justify-between gap-3 py-4 border-b border-[#F1F5F9] text-left transition-colors hover:bg-[#F8FAFC] cursor-pointer active:bg-[#F1F5F9]`}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p
-                        className={`font-semibold text-[16px] leading-tight ${
-                          slot.status === "filled"
-                            ? "text-[#475569]"
-                            : "text-[#1A202C]"
-                        }`}
-                      >
-                        {slot.time}
-                      </p>
-                      <p className="text-[13px] mt-0.5 text-[#64748B]">
-                        {slot.massName}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <SlotStatusPill status={slot.status} />
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 14 14"
-                        fill="none"
-                        className="text-[#D1D9E8]"
-                        aria-hidden="true"
-                      >
-                        <path
-                          d="M5 3l4 4-4 4"
-                          stroke="currentColor"
-                          strokeWidth="1.75"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </div>
-                  </button>
-                ))}
+                {daySlots.map((slot) => {
+                  const remaining = Math.max(0, slot.totalSpots - slot.filledSpots)
+                  return (
+                    <button
+                      key={slot.id}
+                      onClick={() => onSlotTap(slot)}
+                      className={`w-full flex items-center justify-between gap-3 py-4 border-b border-[#F1F5F9] text-left transition-colors hover:bg-[#F8FAFC] cursor-pointer active:bg-[#F1F5F9]`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p
+                          className={`font-semibold text-[16px] leading-tight ${
+                            slot.status === "filled"
+                              ? "text-[#475569]"
+                              : "text-[#1A202C]"
+                          }`}
+                        >
+                          {slot.time}
+                        </p>
+                        <p className="text-[13px] mt-0.5 text-[#64748B]">
+                          {slot.massName}
+                          {remaining > 0
+                            ? ` · ${remaining} ${remaining === 1 ? "spot" : "spots"} left`
+                            : " · Full"}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <SlotStatusPill status={slot.status} />
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 14 14"
+                          fill="none"
+                          className="text-[#D1D9E8]"
+                          aria-hidden="true"
+                        >
+                          <path
+                            d="M5 3l4 4-4 4"
+                            stroke="currentColor"
+                            strokeWidth="1.75"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             ))}
           </div>
@@ -200,8 +258,6 @@ export function SlotVolunteerScreen({
   error?: string
   onBack: () => void
 }) {
-  const remaining = slot.totalSpots - slot.filledSpots
-
   return (
     <div className="min-h-screen bg-white flex flex-col px-5">
       <div className="pt-10 pb-6">
@@ -210,39 +266,21 @@ export function SlotVolunteerScreen({
       <div className="flex-1 flex flex-col gap-6">
         <div>
           <h1 className="text-[26px] font-extrabold text-[#1B3A6B] leading-tight mb-1">
-            Open slot
+            Volunteer for this event
           </h1>
           <p className="text-[#64748B] text-[16px]">
-            Review the details and volunteer if you're free.
+            Review the details and take one of the open spots.
           </p>
         </div>
         <SlotDetailCard slot={slot} />
-        <div className="flex items-center gap-3 px-1">
-          <div className="flex gap-1">
-            {Array.from({ length: slot.totalSpots }).map((_, i) => (
-              <div
-                key={i}
-                className={`w-4 h-4 rounded-full ${
-                  i < slot.filledSpots
-                    ? "bg-[#1B3A6B]"
-                    : "border-2 border-[#D1D9E8]"
-                }`}
-              />
-            ))}
-          </div>
-          <p className="text-[#64748B] text-[15px]">
-            <span className="font-semibold text-[#1A202C]">
-              {slot.filledSpots} of {slot.totalSpots}
-            </span>{" "}
-            spots filled
-            {remaining === 1 && (
-              <span className="text-[#C9921A] font-semibold">
-                {" "}
-                · Last spot!
-              </span>
-            )}
+        <div className="rounded-2xl bg-[#F4F6FB] p-4">
+          <p className="text-[15px] leading-relaxed text-[#475569]">
+            Volunteering puts your name on the volunteer list for{" "}
+            <span className="font-semibold text-[#1A202C]">{slot.massName}</span>.
+            You can cancel from this screen if your plans change.
           </p>
         </div>
+        <SpotsMeter slot={slot} />
       </div>
       <div className="py-8 flex flex-col gap-4">
         {error && <p role="alert" className="text-sm font-medium text-[#C0392B]">{error}</p>}
@@ -282,10 +320,10 @@ export function SlotServingScreen({
       <div className="flex-1 flex flex-col gap-6">
         <div>
           <h1 className="text-[26px] font-extrabold text-[#1B3A6B] leading-tight mb-1">
-            Your slot
+            You're on the list
           </h1>
           <p className="text-[#64748B] text-[16px]">
-            You've already volunteered for this one.
+            Your name is on the volunteer list for this event.
           </p>
         </div>
         <div className="border border-[#D1D9E8] rounded-2xl p-5 bg-white">
@@ -302,26 +340,7 @@ export function SlotServingScreen({
             {slot.massName}
           </p>
         </div>
-        <div className="flex items-center gap-3 px-1">
-          <div className="flex gap-1">
-            {Array.from({ length: slot.totalSpots }).map((_, i) => (
-              <div
-                key={i}
-                className={`w-4 h-4 rounded-full ${
-                  i < slot.filledSpots
-                    ? "bg-[#1B3A6B]"
-                    : "border-2 border-[#D1D9E8]"
-                }`}
-              />
-            ))}
-          </div>
-          <p className="text-[#64748B] text-[15px]">
-            <span className="font-semibold text-[#1A202C]">
-              {slot.filledSpots} of {slot.totalSpots}
-            </span>{" "}
-            spots filled
-          </p>
-        </div>
+        <SpotsMeter slot={slot} />
       </div>
       <div className="py-8 flex flex-col gap-4">
         {error && <p role="alert" className="text-sm font-medium text-[#C0392B]">{error}</p>}

@@ -32,7 +32,7 @@ WHERE table_schema = 'public'
       'id', 'user_id', 'override_date', 'override_type', 'start_time', 'end_time'
     ))
     OR (table_name = 'volunteer_slots' AND column_name IN (
-      'id', 'organization_id', 'slot_date', 'slot_time', 'total_spots'
+      'id', 'organization_id', 'event_id', 'slot_date', 'slot_time', 'mass_name', 'total_spots'
     ))
     OR (table_name = 'slot_signups' AND column_name IN ('slot_id', 'user_id'))
   )

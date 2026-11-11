@@ -13,6 +13,7 @@ This application connects directly to Supabase without needing a Python or FastA
    - It sets up automatic user registration triggers, username resolution (`get_admin_email`), and Row Level Security (RLS).
    - An existing project that already has `member_profiles` without the `onboarded` column also needs `supabase/member_onboarding.sql` (see "Signing in and signing up").
    - An existing project that wants ministry coordinators also needs `supabase/organization_leaders.sql` and, to let coordinators review join requests, `supabase/coordinator_join_approvals.sql` (see section 2.4).
+   - An existing project that wants event volunteer slots (or to let coordinators open them) also needs `supabase/event_volunteer_slots.sql` (see section 2.4.1).
    - An existing project that wants messaging also needs `supabase/messaging.sql` (see section 2.5).
 4. Get your API credentials from Supabase Dashboard -> **Project Settings** -> **API**:
    - Project URL (`https://xyz.supabase.co`)
@@ -380,6 +381,60 @@ administrator and a coordinator can be recorded.
 To verify the installation, run [`supabase/verify_organizations.sql`](verify_organizations.sql);
 section 7 lists the current appointments. The appointment screen is also a safe way to check:
 if the table is missing it reports that the appointments could not be loaded.
+
+## 2.4.1 Event volunteer slots
+
+Admins, coordinators, and ministry leaders can open a **volunteer slot for one specific
+upcoming event**. Members then volunteer from their **Open Slots** tab, and their names form
+the event's **volunteer list** in the workspace. A slot records the event, arrival time, and
+number of volunteers needed, so several slots (for example, setup crew and ushers) can belong
+to the same event.
+
+### Install
+
+The link and the coordinator permissions are part of `schema.sql` for a fresh project. On an
+existing project, run [`supabase/event_volunteer_slots.sql`](event_volunteer_slots.sql) once in
+the Supabase SQL Editor. It is idempotent and adds:
+
+- `volunteer_slots.event_id`, its foreign key to `events`, and an index.
+- A backfill for slots created before the column existed (the app stored the link as an
+  `[event:<id>]` suffix on `mass_name` while it was missing).
+- The coordinator policies on `volunteer_slots` and `slot_signups`.
+- `list_slot_volunteers(slot_ids)`, the security-definer function that returns the names and
+  emails on the slots the caller manages.
+
+### Use it
+
+1. Publish the event first (Events → **Publish event**).
+2. Open **Volunteer slots** in the Administrator or Coordinator workspace.
+3. Find the upcoming event and click **Open slot**. Choose the date, arrival time, and how
+   many volunteers are needed. The form only accepts a day on which the event actually runs,
+   including the later occurrences of a weekly or monthly event.
+4. The slot appears on every member's **Open Slots** tab (after the dashboard reloads). A
+   member taps it and chooses **Volunteer for this slot**.
+5. The workspace's slot row shows the event's **volunteer list** with names, emails, sign-up
+   times, and a remove action. **Delete slot** removes the slot and its signups together.
+
+The same **Volunteers** button on a published event row opens this section with that event's
+slot form ready.
+
+### What the policies allow
+
+- `volunteer_slots`: administrators manage every slot; a coordinator manages only slots whose
+  `organization_id` is a ministry they lead. Members can read every slot (that is how the Open
+  Slots tab lists them).
+- `slot_signups`: members insert only their own signup and delete their own signup;
+  administrators delete any; a coordinator deletes a signup only when it belongs to a slot of
+  their own ministry. A `BEFORE INSERT` trigger locks the slot row and rejects the signup when
+  the number of spots is already reached, so two members cannot take the last spot at once.
+- `events`: cancelling an event or returning it to draft removes its volunteer slots (and
+  their signups), so a closed event never keeps accepting volunteers.
+- `list_slot_volunteers()`: returns rows only when the caller is an administrator or the
+  coordinator of that slot's ministry. A member cannot use it to read another event's roster.
+
+Before the script is run, an administrator can still open slots (the app falls back to the
+label link). Coordinator slot creation and volunteer names need the script. The workspace shows
+a short banner in that state instead of failing silently.
 
 ## 2.5 Messaging (direct chats and ministry group chats)
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useAuth } from "../auth/AuthContext"
 import { isSupabaseConfigured, supabase } from "../../lib/supabase"
 import { isMemberApiConfigured, memberApi } from "../../lib/memberApi"
@@ -8,6 +8,12 @@ import type { Slot } from "../../shared/slot"
 import type { SlotsScreen } from "./navigation"
 
 import { SAMPLE_SLOTS } from "./data"
+import {
+  fetchSlotSignups,
+  fetchVolunteerSlots,
+  formatSlotTime,
+  parseStoredSlotLabel,
+} from "./volunteerSlotsApi"
 
 const SLOTS_KEY = "eskedyul_slots"
 
@@ -32,13 +38,20 @@ export function useSlots() {
 
   const [activeSlot, setActiveSlot] = useState<Slot | null>(null)
   const [error, setError] = useState("")
+  const [reloadKey, setReloadKey] = useState(0)
+  const loadedUserRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!isSupabaseConfigured) return
 
-    // Clear the previous account's slots before the new ones arrive.
-    setSlots([])
-    setActiveSlot(null)
+    // Clear the previous account's slots before the new ones arrive, but keep
+    // the current list while a plain refresh is in flight (no empty flash).
+    const userChanged = loadedUserRef.current !== userId
+    loadedUserRef.current = userId
+    if (userChanged) {
+      setSlots([])
+      setActiveSlot(null)
+    }
     setError("")
 
     if (!userId) return
@@ -47,7 +60,14 @@ export function useSlots() {
     if (isMemberApiConfigured) {
       void memberApi.getSlots().then(savedSlots => {
         if (!active) return
-        setSlots(savedSlots)
+        // The optional backend predates event-linked slots, so it may still
+        // return a compatibility marker as part of the label.
+        setSlots(
+          savedSlots.map(slot => ({
+            ...slot,
+            massName: parseStoredSlotLabel(slot.massName).label,
+          })),
+        )
         setError("")
       }).catch(reason => {
         if (!active) return
@@ -58,52 +78,46 @@ export function useSlots() {
       }
     }
 
-    Promise.all([
-      supabase
-        .from("volunteer_slots")
-        .select("id, slot_date, slot_time, mass_name, total_spots")
-        .order("slot_date")
-        .order("slot_time"),
-      supabase.from("slot_signups").select("slot_id, user_id"),
-    ]).then(([slotResult, signupResult]) => {
-      if (!active) return
-      const failure = slotResult.error ?? signupResult.error
-      if (failure) {
-        setError(failure.message || "Unable to load volunteer slots.")
-        return
+    void (async () => {
+      try {
+        const savedSlots = await fetchVolunteerSlots()
+        // Signups are read in one request and counted per slot, so the list
+        // shows the same "N of M spots filled" that the roster uses.
+        const signups = await fetchSlotSignups(savedSlots.map(slot => slot.id))
+        if (!active) return
+        setSlots(
+          savedSlots.map((slot) => {
+            const count = signups.filter((signup) => signup.slotId === slot.id).length
+            const serving = signups.some(
+              (signup) => signup.slotId === slot.id && signup.userId === userId,
+            )
+            return {
+              id: slot.id,
+              date: slot.date,
+              time: formatSlotTime(slot.time),
+              massName: slot.label,
+              totalSpots: slot.totalSpots,
+              filledSpots: count,
+              status: serving
+                ? "serving"
+                : count >= slot.totalSpots
+                  ? "filled"
+                  : "open",
+              eventId: slot.eventId,
+            }
+          }),
+        )
+        setError("")
+      } catch (reason) {
+        if (!active) return
+        setError(reason instanceof Error ? reason.message : "Unable to load volunteer slots.")
       }
-      const signups = signupResult.data ?? []
-      setSlots(
-        (slotResult.data ?? []).map((slot) => {
-          const count = signups.filter((signup) => signup.slot_id === slot.id).length
-          const serving = signups.some(
-            (signup) => signup.slot_id === slot.id && signup.user_id === userId,
-          )
-          return {
-            id: slot.id,
-            date: slot.slot_date,
-            time: new Date(`1970-01-01T${slot.slot_time}`).toLocaleTimeString(
-              "en-US",
-              { hour: "numeric", minute: "2-digit" },
-            ),
-            massName: slot.mass_name,
-            totalSpots: slot.total_spots,
-            filledSpots: count,
-            status: serving
-              ? "serving"
-              : count >= slot.total_spots
-                ? "filled"
-                : "open",
-          }
-        }),
-      )
-      setError("")
-    })
+    })()
 
     return () => {
       active = false
     }
-  }, [userId])
+  }, [userId, reloadKey])
 
   useEffect(() => {
     if (isSupabaseConfigured) {
@@ -122,6 +136,11 @@ export function useSlots() {
     setActiveSlot,
 
     error,
+
+    /** Re-reads the slots, e.g. when the member opens the Open Slots tab. */
+    refresh() {
+      setReloadKey(key => key + 1)
+    },
 
     /** Selects a slot from the list and returns the screen that matches its status. */
 
@@ -152,8 +171,12 @@ export function useSlots() {
           user_id: user.id,
         })
         if (result.error) {
-          setError(result.error.message)
-          return { ok: false, message: result.error.message }
+          const message =
+            result.error.code === "23503"
+              ? "This slot is no longer available."
+              : result.error.message
+          setError(message)
+          return { ok: false, message }
         }
       }
 

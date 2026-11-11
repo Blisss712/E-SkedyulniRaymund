@@ -3,6 +3,7 @@ import { BackButton, Button, InputField } from "../../shared/ui"
 import { useAdmin } from "./useAdmin"
 import { CoordinatorsSection } from "./coordinators"
 import { EventsTimeline } from "./eventsTimeline"
+import { VolunteerSlotsSection } from "./volunteerSlots"
 import { MessagesPanel } from "../messaging/messaging"
 import { useMessaging } from "../messaging/MessagingContext"
 import type { ChatConversation } from "../messaging/types"
@@ -36,7 +37,7 @@ import type {
 } from "./types"
 import type { TimetablePosition } from "../availability/types"
 
-export type AdminSection = "dashboard" | "organizations" | "events" | "requests" | "coordinators" | "messages"
+export type AdminSection = "dashboard" | "organizations" | "events" | "slots" | "requests" | "coordinators" | "messages"
 
 /** Formats a stored `YYYY-MM-DD` at midday so no timezone shifts the day. */
 function formatCreatedDate(value: string) {
@@ -51,20 +52,22 @@ const ADMIN_SECTIONS: AdminSectionItem[] = [
   { value: "dashboard", label: "Dashboard", short: "Home" },
   { value: "organizations", label: "Organizations", short: "Orgs" },
   { value: "events", label: "Events", short: "Events" },
-  { value: "requests", label: "Join requests", short: "Requests" },
+  { value: "slots", label: "Volunteer slots", short: "Slots" },
+  { value: "requests", label: "Join requests", short: "Review" },
   { value: "coordinators", label: "Coordinators", short: "Leaders" },
   { value: "messages", label: "Messages", short: "Chat" },
 ]
 /**
  * A coordinator sees only their own ministries: no organization management and
  * no Coordinator appointments of their own, but they do review the join requests
- * of the ministries they lead.
+ * of the ministries they lead and open their volunteer slots.
  */
 const COORDINATOR_SECTIONS: AdminSectionItem[] = [
   { value: "dashboard", label: "Dashboard", short: "Home" },
   { value: "organizations", label: "My ministries", short: "Ministries" },
   { value: "events", label: "Events", short: "Events" },
-  { value: "requests", label: "Join requests", short: "Requests" },
+  { value: "slots", label: "Volunteer slots", short: "Slots" },
+  { value: "requests", label: "Join requests", short: "Review" },
   { value: "messages", label: "Messages", short: "Chat" },
 ]
 
@@ -987,12 +990,14 @@ function OrganizationForm({ initial, onCancel, onSave }: {
   )
 }
 
-function EventList({ admin, onCreate, onCreateForOrganization, onEdit, scoped, view, onViewChange, position, onPositionChange }: {
+function EventList({ admin, onCreate, onCreateForOrganization, onEdit, onManageSlots, scoped, view, onViewChange, position, onPositionChange }: {
   admin: ReturnType<typeof useAdmin>
   onCreate: () => void
   /** Opens the event form with a ministry already chosen. */
   onCreateForOrganization: (organizationId: string) => void
   onEdit: (id: string) => void
+  /** Opens the Volunteer slots section with this event's slot form ready. */
+  onManageSlots: (id: string) => void
   scoped: boolean
   /** List or timeline; kept by the workspace so an event form returns to it. */
   view: "list" | "timeline"
@@ -1217,6 +1222,17 @@ function EventList({ admin, onCreate, onCreateForOrganization, onEdit, scoped, v
                         >
                           Edit
                         </Button>
+                        {event.status === "published" && (
+                          <Button
+                            variant="ghost"
+                            size="compact"
+                            fullWidth={false}
+                            onClick={() => onManageSlots(event.id)}
+                            className="border border-gold/40 text-gold hover:bg-gold-light"
+                          >
+                            Volunteers
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="compact"
@@ -1523,6 +1539,9 @@ export function AdminScreen({
   // held here, so opening an event form and saving returns to the same view
   // instead of falling back to the list of the current week.
   const [eventsView, setEventsView] = useState<"list" | "timeline">("list")
+  // An event row's "Volunteers" action opens this event's slot form once the
+  // Volunteer slots section is showing.
+  const [slotIntent, setSlotIntent] = useState<string | null>(null)
   const [timelinePosition, setTimelinePosition] = useState<TimetablePosition>({
     weekOffset: 0,
     view: "week",
@@ -1622,6 +1641,18 @@ export function AdminScreen({
         variant="admin"
       />
     )
+  } else if (view.name === "section" && view.section === "slots") {
+    content = (
+      <VolunteerSlotsSection
+        events={admin.events}
+        organizations={admin.organizations}
+        scoped={scoped}
+        eventsLoading={admin.loading}
+        onOpenEvents={() => openSection("events")}
+        initialEventId={slotIntent}
+        onInitialEventHandled={() => setSlotIntent(null)}
+      />
+    )
   } else if (view.name === "section" && view.section === "dashboard") {
     content = (
       <Dashboard
@@ -1658,6 +1689,10 @@ export function AdminScreen({
         onCreate={() => setView({ name: "event-form" })}
         onCreateForOrganization={organizationId => setView({ name: "event-form", organizationId })}
         onEdit={id => setView({ name: "event-form", id })}
+        onManageSlots={id => {
+          setSlotIntent(id)
+          openSection("slots")
+        }}
       />
     )
   }

@@ -141,12 +141,21 @@ CREATE TABLE IF NOT EXISTS public.member_availability_overrides (
 CREATE TABLE IF NOT EXISTS public.volunteer_slots (
     id VARCHAR(40) PRIMARY KEY,
     organization_id VARCHAR(40) NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    -- The specific event this slot belongs to. NULL keeps legacy/sample slots
+    -- that are not tied to an event; see supabase/event_volunteer_slots.sql.
+    event_id VARCHAR(40) NULL REFERENCES public.events(id) ON DELETE CASCADE,
     slot_date DATE NOT NULL,
     slot_time TIME NOT NULL,
     mass_name VARCHAR(180) NOT NULL,
     total_spots INTEGER NOT NULL CHECK (total_spots >= 1),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Existing projects already have volunteer_slots. `CREATE TABLE IF NOT EXISTS`
+-- does not add new columns, so make the event link idempotent here as well.
+ALTER TABLE public.volunteer_slots
+    ADD COLUMN IF NOT EXISTS event_id VARCHAR(40)
+        REFERENCES public.events(id) ON DELETE CASCADE;
 
 CREATE TABLE IF NOT EXISTS public.slot_signups (
     slot_id VARCHAR(40) NOT NULL REFERENCES public.volunteer_slots(id) ON DELETE CASCADE,
@@ -167,6 +176,7 @@ CREATE TABLE IF NOT EXISTS public.member_assignments (
 CREATE INDEX IF NOT EXISTS idx_recurring_availability_user ON public.member_recurring_availability(user_id);
 CREATE INDEX IF NOT EXISTS idx_availability_overrides_user_date ON public.member_availability_overrides(user_id, override_date);
 CREATE INDEX IF NOT EXISTS idx_volunteer_slots_date ON public.volunteer_slots(slot_date, slot_time);
+CREATE INDEX IF NOT EXISTS idx_volunteer_slots_event ON public.volunteer_slots(event_id);
 CREATE INDEX IF NOT EXISTS idx_slot_signups_user ON public.slot_signups(user_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_user_date ON public.member_assignments(user_id, assignment_date);
 
@@ -733,7 +743,8 @@ FOR ALL TO authenticated
 USING (user_id = auth.uid() OR public.is_admin(auth.uid()))
 WITH CHECK (user_id = auth.uid() OR public.is_admin(auth.uid()));
 
--- Slots are visible to signed-in members. Only administrators create or edit them.
+-- Slots are visible to signed-in members. Administrators create or edit them,
+-- and a ministry's coordinator can do the same for the ministries they lead.
 DROP POLICY IF EXISTS "Members read volunteer slots" ON public.volunteer_slots;
 CREATE POLICY "Members read volunteer slots" ON public.volunteer_slots
 FOR SELECT TO authenticated
@@ -744,6 +755,12 @@ CREATE POLICY "Admins manage volunteer slots" ON public.volunteer_slots
 FOR ALL TO authenticated
 USING (public.is_admin(auth.uid()))
 WITH CHECK (public.is_admin(auth.uid()));
+
+DROP POLICY IF EXISTS "Coordinators manage ministry volunteer slots" ON public.volunteer_slots;
+CREATE POLICY "Coordinators manage ministry volunteer slots" ON public.volunteer_slots
+FOR ALL TO authenticated
+USING (public.is_organization_leader(organization_id, auth.uid()))
+WITH CHECK (public.is_organization_leader(organization_id, auth.uid()));
 
 DROP POLICY IF EXISTS "Members read slot signups" ON public.slot_signups;
 CREATE POLICY "Members read slot signups" ON public.slot_signups
@@ -759,6 +776,114 @@ DROP POLICY IF EXISTS "Members cancel own slot signups" ON public.slot_signups;
 CREATE POLICY "Members cancel own slot signups" ON public.slot_signups
 FOR DELETE TO authenticated
 USING (user_id = auth.uid() OR public.is_admin(auth.uid()));
+
+DROP POLICY IF EXISTS "Coordinators cancel ministry slot signups" ON public.slot_signups;
+CREATE POLICY "Coordinators cancel ministry slot signups" ON public.slot_signups
+FOR DELETE TO authenticated
+USING (
+    user_id = auth.uid()
+    OR public.is_admin(auth.uid())
+    OR EXISTS (
+        SELECT 1
+        FROM public.volunteer_slots AS slot
+        WHERE slot.id = slot_signups.slot_id
+          AND public.is_organization_leader(slot.organization_id, auth.uid())
+    )
+);
+
+-- Capacity is enforced in the database, not only in the browser: two members
+-- tapping the last spot at the same time cannot both take it.
+CREATE OR REPLACE FUNCTION public.enforce_slot_capacity()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    capacity INTEGER;
+    taken INTEGER;
+BEGIN
+    SELECT total_spots INTO capacity
+    FROM public.volunteer_slots
+    WHERE id = NEW.slot_id
+    FOR UPDATE;
+
+    SELECT COUNT(*) INTO taken
+    FROM public.slot_signups
+    WHERE slot_id = NEW.slot_id;
+
+    IF capacity IS NOT NULL AND taken >= capacity THEN
+        RAISE EXCEPTION 'This volunteer slot is full.';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS enforce_slot_capacity ON public.slot_signups;
+CREATE TRIGGER enforce_slot_capacity
+    BEFORE INSERT ON public.slot_signups
+    FOR EACH ROW EXECUTE FUNCTION public.enforce_slot_capacity();
+
+-- A cancelled or re-drafted event must not keep accepting volunteers. Deleting
+-- the slots also removes their signups through the existing cascade.
+CREATE OR REPLACE FUNCTION public.remove_volunteer_slots_for_closed_event()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF NEW.status IN ('cancelled', 'draft')
+       AND OLD.status IS DISTINCT FROM NEW.status THEN
+        DELETE FROM public.volunteer_slots WHERE event_id = NEW.id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS remove_volunteer_slots_for_closed_event ON public.events;
+CREATE TRIGGER remove_volunteer_slots_for_closed_event
+    AFTER UPDATE OF status ON public.events
+    FOR EACH ROW EXECUTE FUNCTION public.remove_volunteer_slots_for_closed_event();
+
+-- The event's volunteer list: an administrator or that ministry's coordinator
+-- can read the names behind the signups on the slots they manage.
+CREATE OR REPLACE FUNCTION public.list_slot_volunteers(p_slot_ids TEXT[])
+RETURNS TABLE (
+    slot_id VARCHAR(40),
+    user_id UUID,
+    full_name TEXT,
+    email TEXT,
+    signed_up_at TIMESTAMPTZ
+)
+LANGUAGE SQL
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT
+        slot.id AS slot_id,
+        signup.user_id,
+        COALESCE(NULLIF(btrim(profile.full_name), ''), 'Member') AS full_name,
+        COALESCE(profile.email, '')::TEXT AS email,
+        signup.created_at AS signed_up_at
+    FROM public.slot_signups AS signup
+    JOIN public.volunteer_slots AS slot
+      ON slot.id = signup.slot_id
+    LEFT JOIN public.member_profiles AS profile
+      ON profile.user_id = signup.user_id
+    WHERE slot.id = ANY(p_slot_ids)
+      AND (
+          public.is_admin(auth.uid())
+          OR public.is_organization_leader(slot.organization_id, auth.uid())
+      )
+    ORDER BY slot.slot_date, slot.slot_time, signup.created_at;
+$$;
+
+REVOKE ALL ON FUNCTION public.list_slot_volunteers(TEXT[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.list_slot_volunteers(TEXT[]) TO authenticated;
 
 -- Assignments are written by administrators and visible to the assigned member.
 DROP POLICY IF EXISTS "Members read own assignments" ON public.member_assignments;

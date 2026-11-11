@@ -22,6 +22,13 @@ export interface Slot {
   status: SlotStatus
 
   withinCutoff?: boolean
+
+  /**
+   * The event this slot was opened for. A slot opened from the admin or
+   * coordinator workspace belongs to one specific upcoming event, so its
+   * volunteers can be read as that event's volunteer list.
+   */
+  eventId?: string
 }
 
 /** "7:00 PM" (how slots store their time) → "19:00". */

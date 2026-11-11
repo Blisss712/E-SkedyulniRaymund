@@ -109,6 +109,15 @@ export default function App() {
     void refreshMessagesRef.current()
   }, [screen])
 
+  // Members and coordinators open slots while a member is already signed in, so
+  // re-read them whenever the Open Slots tab is shown again.
+  const refreshSlotsRef = useRef(slots.refresh)
+  refreshSlotsRef.current = slots.refresh
+  useEffect(() => {
+    if (screen !== "home" || homeTab !== "slots") return
+    refreshSlotsRef.current()
+  }, [screen, homeTab])
+
   // Memberships and requests change while the member is away (an administrator
   // may approve a request), so re-read them whenever the dashboard opens.
   const refreshMinistriesRef = useRef(ministries.refresh)
