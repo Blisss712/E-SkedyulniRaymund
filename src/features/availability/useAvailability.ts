@@ -34,6 +34,8 @@ function initialTimetablePosition(): TimetablePosition {
     view: window.matchMedia("(min-width: 640px)").matches ? "week" : "day",
 
     dayIndex: (new Date().getDay() + 6) % 7,
+
+    mode: "timeline",
   }
 }
 

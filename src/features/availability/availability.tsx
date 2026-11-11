@@ -4,16 +4,20 @@ import { useAuth } from "../auth/AuthContext"
 import type {
   RecurringAvail,
   OneTimeOverride,
+  ScheduleMode,
   TimetablePosition,
 } from "./types"
 
 import { DAYS_ORDER } from "./data"
 
-import { BackButton, useSheetClose } from "../../shared/ui"
+import { BackButton, Button, useSheetClose } from "../../shared/ui"
 
 import { slotTimeTo24h, type Slot } from "../../shared/slot"
 
+import type { Ministry } from "../../shared/home"
+
 import {
+  WeeklyAgenda,
   WeeklyTimetable,
   WeekNav,
   addDaysTo,
@@ -100,6 +104,12 @@ function availabilityEvents(
   assignments: Assignment[],
   slots: Slot[],
   scheduledEvents: AdminEvent[],
+
+  /** Organization id -> ministry name, for naming the ministry when all are shown. */
+  ministryNames: Map<string, string>,
+
+  /** True when the dashboard is showing every ministry, so each event names its own. */
+  labelMinistry: boolean,
 
   weekStart: Date,
   onViewSlot: (slot: Slot) => void,
@@ -223,6 +233,9 @@ function availabilityEvents(
     if (event.status !== "published") continue
 
     const schedule = eventSchedule(event)
+    const ministryName = labelMinistry
+      ? ministryNames.get(event.organizationId) ?? ""
+      : ""
 
     // A multi-day event shows one block on each of its days, always using the
     // same daily time range.
@@ -240,7 +253,11 @@ function availabilityEvents(
         status: "event",
         color: "navy",
         detail: event.location,
+        group: ministryName || undefined,
         rows: [
+          ...(ministryName
+            ? [["Ministry", ministryName] as [string, string]]
+            : []),
           ["Dates", formatEventDates(schedule)],
           ["Visibility", event.visibility === "public" ? "Public" : "Members only"],
         ],
@@ -699,9 +716,12 @@ function CalendarIcon() {
 
 function FullScheduleDialog({
   onClose,
+  subtitle,
   children,
 }: {
   onClose: () => void
+  /** The ministry scope, so the full-screen view still says what it is showing. */
+  subtitle?: string
   children: React.ReactNode
 }) {
   useEffect(() => {
@@ -742,9 +762,16 @@ function FullScheduleDialog({
         style={{ paddingTop: "calc(0.75rem + env(safe-area-inset-top))" }}
       >
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
-          <h2 id="full-schedule-title" className="text-2xl font-extrabold">
-            My Schedule
-          </h2>
+          <div className="min-w-0">
+            <h2 id="full-schedule-title" className="text-2xl font-extrabold">
+              My Schedule
+            </h2>
+            {subtitle && (
+              <p className="text-[15px] font-semibold text-white/70">
+                {subtitle}
+              </p>
+            )}
+          </div>
           <button
             onClick={onClose}
             className="flex min-h-[56px] shrink-0 items-center gap-2 rounded-xl bg-white px-5 text-[19px] font-bold text-[#1B3A6B] hover:bg-[#E8EDF7]"
@@ -784,13 +811,46 @@ function FullScheduleDialog({
 
 // ─── Availability Tab (Home) ──────────────────────────────────────────────────
 
+function ScheduleModeSwitch({
+  mode,
+  onChange,
+}: {
+  mode: ScheduleMode
+  onChange: (mode: ScheduleMode) => void
+}) {
+  return (
+    <div
+      className="mb-4 flex gap-1 rounded-xl bg-[#E8EDF7] p-1"
+      role="group"
+      aria-label="How to show your schedule"
+    >
+      <Button
+        variant={mode === "timeline" ? "tabActive" : "tabInactive"}
+        size="compact"
+        onClick={() => onChange("timeline")}
+        ariaPressed={mode === "timeline"}
+      >
+        Timeline
+      </Button>
+      <Button
+        variant={mode === "list" ? "tabActive" : "tabInactive"}
+        size="compact"
+        onClick={() => onChange("list")}
+        ariaPressed={mode === "list"}
+      >
+        List
+      </Button>
+    </div>
+  )
+}
+
 export function AvailabilityTab({
   recurringEntries,
   overrides,
   slots,
   scheduledEvents,
-  ministryName,
-  ministryCount = 0,
+  scope,
+  joinedMinistries,
   position,
   onPositionChange,
 
@@ -812,11 +872,11 @@ export function AvailabilityTab({
 
   scheduledEvents: AdminEvent[]
 
-  /** The ministry chosen in the dashboard header; only its events are on the timetable. */
-  ministryName?: string
+  /** The ministry chosen in the dashboard header, or its "All ministries" entry. */
+  scope: Ministry | null
 
-  /** How many ministries the member belongs to, so the scope note can point at the switcher. */
-  ministryCount?: number
+  /** Approved memberships: names each event's ministry when all of them are shown. */
+  joinedMinistries: Ministry[]
 
   position: TimetablePosition
 
@@ -848,9 +908,26 @@ export function AvailabilityTab({
 
   const [showFullSchedule, setShowFullSchedule] = useState(false)
 
+  /** The grid or the day-by-day list; kept with the week so an add/edit screen returns to it. */
+  const mode: ScheduleMode = position.mode ?? "timeline"
+
   const { weekOffset } = position
 
   const weekStart = addDaysTo(mondayOf(new Date()), weekOffset * 7)
+
+  /** True when "All ministries" is the scope, so every event names its own ministry. */
+  const scopeAll = Boolean(scope?.all)
+
+  /** "Altar Servers" or "All 5 ministries", for headings that need to name the scope. */
+  const scopeTitle = scope
+    ? scopeAll
+      ? `All ${joinedMinistries.length} ministries`
+      : scope.name
+    : ""
+
+  const ministryNames = new Map(
+    joinedMinistries.map(item => [item.id, item.name]),
+  )
 
   useEffect(() => {
     let active = true
@@ -878,6 +955,8 @@ export function AvailabilityTab({
       assignments,
       slots,
       scheduledEvents,
+      ministryNames,
+      scopeAll,
       weekStart,
       onViewSlot,
     ),
@@ -927,16 +1006,23 @@ export function AvailabilityTab({
         My Availability This Week
       </p>
       <p className="mt-1 text-[17px] leading-relaxed text-[#64748B]">
-        Green boxes show when you're free. Red boxes show when you're not
-        available. Navy boxes are when you're serving.
+        {mode === "timeline"
+          ? "Green boxes show when you're free. Red boxes show when you're not available. Navy boxes are when you're serving."
+          : "Green means you're free, red means you're not available, and navy is when you're serving."}
       </p>
 
-      {ministryName && (
+      {scope && (
         <p className="mt-2 inline-flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-[#1B3A6B]/10 px-3 py-1.5 text-[15px] font-semibold text-[#1B3A6B]">
-          <span>Showing {ministryName} events.</span>
-          {ministryCount > 1 && (
+          <span>
+            {scopeAll
+              ? `Showing events from all ${joinedMinistries.length} of your ministries.`
+              : `Showing ${scope.name} events.`}
+          </span>
+          {joinedMinistries.length > 1 && (
             <span className="font-medium text-[#475569]">
-              Switch ministries above to see the others.
+              {scopeAll
+                ? "Choose one above to focus on it."
+                : "Switch ministries above to see the others."}
             </span>
           )}
         </p>
@@ -948,23 +1034,36 @@ export function AvailabilityTab({
         onPositionChange={onPositionChange}
       />
 
-      {/* A still preview only: swiping over it scrolls the page, tapping it opens the full schedule. */}
-      <div
-        role="button"
-        tabIndex={0}
-        aria-label="Open your full schedule"
-        onClick={() => setShowFullSchedule(true)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault()
+      <ScheduleModeSwitch
+        mode={mode}
+        onChange={next => onPositionChange({ mode: next })}
+      />
 
-            setShowFullSchedule(true)
-          }
-        }}
-        className="cursor-pointer rounded-2xl"
-      >
-        <WeeklyTimetable {...timetableProps} layout="preview" />
-      </div>
+      {mode === "timeline" ? (
+        /* A still preview only: swiping over it scrolls the page, tapping it opens the full schedule. */
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Open your full schedule"
+          onClick={() => setShowFullSchedule(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault()
+
+              setShowFullSchedule(true)
+            }
+          }}
+          className="cursor-pointer rounded-2xl"
+        >
+          <WeeklyTimetable {...timetableProps} layout="preview" />
+        </div>
+      ) : (
+        <WeeklyAgenda
+          events={timetableProps.events}
+          weekStart={weekStart}
+          detailsLabel="Schedule details"
+        />
+      )}
 
       <button
         onClick={() => setShowFullSchedule(true)}
@@ -974,13 +1073,28 @@ export function AvailabilityTab({
       </button>
 
       {showFullSchedule && (
-        <FullScheduleDialog onClose={() => setShowFullSchedule(false)}>
+        <FullScheduleDialog
+          onClose={() => setShowFullSchedule(false)}
+          subtitle={scopeTitle || undefined}
+        >
           <WeekNav
             weekOffset={weekOffset}
             weekStart={weekStart}
             onPositionChange={onPositionChange}
           />
-          <WeeklyTimetable {...timetableProps} layout="full" />
+          <ScheduleModeSwitch
+            mode={mode}
+            onChange={next => onPositionChange({ mode: next })}
+          />
+          {mode === "timeline" ? (
+            <WeeklyTimetable {...timetableProps} layout="full" />
+          ) : (
+            <WeeklyAgenda
+              events={timetableProps.events}
+              weekStart={weekStart}
+              detailsLabel="Schedule details"
+            />
+          )}
         </FullScheduleDialog>
       )}
 

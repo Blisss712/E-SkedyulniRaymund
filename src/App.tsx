@@ -28,7 +28,7 @@ import { AdminLoginScreen } from "./features/admin/login"
 import { CoordinatorLoginScreen } from "./features/admin/coordinatorLogin"
 import { useJoinRequests } from "./features/admin/useJoinRequests"
 import { useMyMinistries } from "./features/organizations/useMyMinistries"
-import { eventsForMinistry } from "./features/organizations/ministryScope"
+import { eventsForScope } from "./features/organizations/ministryScope"
 import { logoutAdmin, getAdminToken } from "./features/admin/api"
 import { AuthScreen } from "./features/auth/AuthScreen"
 import { PasswordResetScreen } from "./features/auth/PasswordResetScreen"
@@ -83,8 +83,24 @@ export default function App() {
   const [ministryId, setMinistryId] = useState("")
   /** Approved memberships: the ministries the header's selector can switch between. */
   const joinedMinistries = ministries.items.filter(item => !item.waiting)
+  /** Pending requests are listed in the sheet but cannot be selected. */
+  const waitingMinistries = ministries.items.filter(item => item.waiting)
+  /** Shows every approved ministry on one schedule; only worth offering when there are several. */
+  const allMinistries: Ministry = {
+    id: "all-ministries",
+    name: "All ministries",
+    parish: "Every ministry you belong to",
+    all: true,
+  }
+  const ministryChoices: Ministry[] = [
+    ...(joinedMinistries.length > 1 ? [allMinistries] : []),
+    ...joinedMinistries,
+    ...waitingMinistries,
+  ]
+  // Default to one ministry, so the week is focused until "All ministries" is
+  // picked. A request that is still waiting for approval is never the scope.
   const ministry: Ministry | null =
-    joinedMinistries.find(item => item.id === ministryId) ??
+    ministryChoices.find(item => item.id === ministryId && !item.waiting) ??
     joinedMinistries[0] ??
     null
 
@@ -381,9 +397,12 @@ export default function App() {
   }, [loading, authNotice, user])
 
   function renderMemberDashboard(embedded = false) {
-    // The timetable belongs to the ministry named in the header, not to every
-    // ministry the member happens to belong to.
-    const ministryEvents = eventsForMinistry(publishedEvents, ministry)
+    // The timetable follows the header's scope: one ministry, or all of them.
+    const ministryEvents = eventsForScope(
+      publishedEvents,
+      ministry,
+      joinedMinistries,
+    )
 
     // Everything the assistant is allowed to know, read from the same state the
     // dashboard already shows. The snapshot filters events to joined ministries.
@@ -402,7 +421,7 @@ export default function App() {
       <>
         <HomeScreen
           userName={wizard.form.name || profile?.fullName || "Maria Santos"}
-          ministries={ministries.items}
+          ministries={ministryChoices}
           ministry={ministry}
           onMinistryChange={next => setMinistryId(next.id)}
           tab={homeTab}
@@ -427,8 +446,8 @@ export default function App() {
               slots={slots.slots}
               error={availability.error}
               scheduledEvents={ministryEvents}
-              ministryName={ministry?.name}
-              ministryCount={joinedMinistries.length}
+              scope={ministry}
+              joinedMinistries={joinedMinistries}
               onViewSlot={slot => {
                 slots.setActiveSlot(slot)
                 setDashboardReturnScreen(embedded ? "admin" : "home")

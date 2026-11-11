@@ -46,6 +46,8 @@ export interface TimetableEvent {
 
   detail?: string // third line on the box when there's room, e.g. "Lector" or "Sunday Mass"
 
+  group?: string // the ministry the entry belongs to, shown when "All ministries" is the scope
+
   rows?: Array<[string, string]> // extra pop-up rows, shown after Status
 
   note?: string // message at the bottom of the pop-up
@@ -355,6 +357,8 @@ function EventSheet({
     ],
 
     ["Status", STATUS_TEXT[event.status]],
+
+    ...(event.group ? [["Ministry", event.group] as [string, string]] : []),
 
     ...(event.rows ?? []),
   ]
@@ -960,6 +964,167 @@ export function WeeklyTimetable({
           ))}
         </div>
       )}
+
+      {selected && (
+        <EventSheet
+          event={selected.event}
+          date={selected.date}
+          label={detailsLabel}
+          onClose={() => setSelected(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── List view ────────────────────────────────────────────────────────────────
+
+/**
+ * The same week as the timetable, read top to bottom instead of plotted on a
+ * grid: one section per day, entries in time order.
+ *
+ * The administrator and coordinator workspaces already offer a list next to
+ * their timeline; this is the member's version of that choice. It keeps the
+ * colour dot and the tap-for-details behaviour of the grid, and it names the
+ * ministry on each row when "All ministries" is the scope.
+ */
+export function WeeklyAgenda({
+  events,
+  weekStart,
+  detailsLabel,
+}: {
+  events: TimetableEvent[]
+
+  weekStart: Date
+
+  /** Accessible name of the details sheet; defaults to the member's wording. */
+  detailsLabel?: string
+}) {
+  const today = useMemo(() => new Date(), [])
+
+  const [selected, setSelected] = useState<{
+    event: TimetableEvent
+    date: Date
+  } | null>(null)
+
+  const days = Array.from({ length: 7 }, (_, index) =>
+    addDaysTo(weekStart, index),
+  )
+
+  const byDay = days.map((date, index) => ({
+    date,
+    index,
+    entries: events
+      .filter(event => event.day === index)
+      .sort(
+        (a, b) =>
+          toMinutes(a.start) - toMinutes(b.start) ||
+          a.label.localeCompare(b.label),
+      ),
+  }))
+
+  if (events.length === 0) {
+    return (
+      <p className="rounded-2xl border-2 border-[#D1D9E8] bg-white p-6 text-center text-[16px] font-semibold leading-relaxed text-[#64748B]">
+        Nothing on your schedule this week. Use “Previous” or “Next” to look at
+        another week.
+      </p>
+    )
+  }
+
+  return (
+    <div>
+      <p className="mb-3 text-[15px] font-semibold text-[#64748B]">
+        {events.length === 1 ? "1 entry this week" : `${events.length} entries this week`}
+      </p>
+
+      <div className="flex flex-col gap-4">
+        {byDay.map(({ date, index, entries }) => {
+          const isToday = sameDate(date, today)
+
+          return (
+            <section
+              key={index}
+              className="overflow-hidden rounded-2xl border-2 border-[#1B3A6B]/25 bg-white"
+            >
+              <div
+                className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5 ${
+                  isToday
+                    ? "bg-[#1B3A6B] text-white"
+                    : "bg-[#E8EDF7] text-[#1B3A6B]"
+                }`}
+              >
+                <h3 className="text-[16px] font-extrabold">
+                  {DAY_LONG[index]} ·{" "}
+                  {date.toLocaleDateString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                  })}
+                  {isToday && (
+                    <span className="ml-2 rounded-full bg-white/20 px-2 py-0.5 text-[12px] font-bold">
+                      Today
+                    </span>
+                  )}
+                </h3>
+                <p
+                  className={`text-[13px] font-bold ${
+                    isToday ? "text-white/80" : "text-[#64748B]"
+                  }`}
+                >
+                  {entries.length === 0
+                    ? "Nothing scheduled"
+                    : entries.length === 1
+                      ? "1 entry"
+                      : `${entries.length} entries`}
+                </p>
+              </div>
+
+              {entries.length > 0 && (
+                <ul className="divide-y divide-[#E2E8F0]">
+                  {entries.map(event => (
+                    <li key={event.id}>
+                      <button
+                        onClick={() => setSelected({ event, date })}
+                        aria-label={`${event.label}, ${DAY_LONG[index]}, ${
+                          event.allDay
+                            ? "all day"
+                            : `${formatClock(event.start)} to ${formatClock(event.end)}`
+                        }${event.group ? `, ${event.group}` : ""}${
+                          event.detail ? `, ${event.detail}` : ""
+                        }`}
+                        className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-[#F4F6FB] focus-visible:bg-[#F4F6FB] focus-visible:outline-none"
+                      >
+                        <span
+                          className={`mt-1.5 h-3.5 w-3.5 shrink-0 rounded-full ${TIMETABLE_COLORS[event.color].swatch}`}
+                          aria-hidden="true"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                            <span className="text-[17px] font-extrabold leading-snug text-[#1A202C]">
+                              {event.label}
+                            </span>
+                            {event.group && (
+                              <span className="rounded-full bg-[#E8EDF7] px-2 py-0.5 text-[12px] font-bold text-[#1B3A6B]">
+                                {event.group}
+                              </span>
+                            )}
+                          </span>
+                          <span className="mt-0.5 block text-[15px] font-semibold text-[#475569]">
+                            {event.allDay
+                              ? "All day"
+                              : formatRange(event.start, event.end)}
+                            {event.detail ? ` · ${event.detail}` : ""}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )
+        })}
+      </div>
 
       {selected && (
         <EventSheet
