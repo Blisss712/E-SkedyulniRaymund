@@ -323,7 +323,7 @@ export function SlotServingScreen({
             You're on the list
           </h1>
           <p className="text-[#64748B] text-[16px]">
-            Your name is on the volunteer list for this event.
+            You are serving at {slot.time} {slot.massName}.
           </p>
         </div>
         <div className="border border-[#D1D9E8] rounded-2xl p-5 bg-white">

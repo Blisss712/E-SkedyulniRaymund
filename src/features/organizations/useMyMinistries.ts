@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { useAuth } from "../auth/AuthContext"
+import { DEMO_MEMBER_ID, useAuth } from "../auth/AuthContext"
 import { isSupabaseConfigured } from "../../lib/supabase"
 import type { Ministry } from "../../shared/home"
 import { fetchMyMinistries } from "./api"
@@ -16,6 +16,12 @@ const DEMO_MINISTRIES: Ministry[] = [
   { id: "youth", name: "Youth Ministry", parish: "St. Joseph Parish", waiting: true },
 ]
 
+function demoMinistriesFor(userId: string): Ministry[] {
+  return userId === DEMO_MEMBER_ID
+    ? DEMO_MINISTRIES.filter(ministry => ministry.id === "altar")
+    : DEMO_MINISTRIES
+}
+
 /**
  * The ministries shown on the member dashboard.
  *
@@ -29,14 +35,14 @@ export function useMyMinistries() {
   const userId = user?.id ?? ""
 
   const [items, setItems] = useState<Ministry[]>(
-    isSupabaseConfigured ? [] : DEMO_MINISTRIES,
+    isSupabaseConfigured ? [] : demoMinistriesFor(userId),
   )
   const [loading, setLoading] = useState(isSupabaseConfigured)
   const [error, setError] = useState("")
 
   const refresh = useCallback(async () => {
     if (!isSupabaseConfigured) {
-      setItems(DEMO_MINISTRIES)
+      setItems(demoMinistriesFor(userId))
       setLoading(false)
       setError("")
       return

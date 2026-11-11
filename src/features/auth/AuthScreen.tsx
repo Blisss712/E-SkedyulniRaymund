@@ -7,7 +7,11 @@ import {
   Logo,
   ScreenShell,
 } from "../../shared/ui"
-import { useAuth } from "./AuthContext"
+import {
+  DEMO_MEMBER_PASSWORD,
+  DEMO_MEMBER_USERNAME,
+  useAuth,
+} from "./AuthContext"
 import { type SocialProvider, type AuthErrorCode, type UserProfile } from "./types"
 import { isSupabaseConfigured } from "../../lib/supabase"
 import { FacebookIcon, GoogleIcon } from "./providerIcons"
@@ -336,6 +340,15 @@ export function AuthScreen({
               <div className="h-px flex-1 bg-[#D1D9E8]" />
             </div>
 
+            {!isSupabaseConfigured && tab === "signin" && (
+              <p className="mb-4 rounded-xl bg-[#F4F6FB] p-4 text-base leading-relaxed text-[#1B3A6B]">
+                Offline demo sign-in:{" "}
+                <span className="font-bold">
+                  {DEMO_MEMBER_USERNAME} / {DEMO_MEMBER_PASSWORD}
+                </span>
+              </p>
+            )}
+
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               {tab === "signup" && (
                 <InputField
@@ -354,16 +367,16 @@ export function AuthScreen({
 
               <InputField
                 id="auth-email"
-                label="Email Address"
-                type="email"
+                label={isSupabaseConfigured ? "Email Address" : "Email or demo username"}
+                type={isSupabaseConfigured ? "email" : "text"}
                 value={email}
                 onChange={(val) => {
                   setEmail(val)
                   setError("")
                   setErrorCode("")
                 }}
-                placeholder="you@example.com"
-                autoComplete="email"
+                placeholder={isSupabaseConfigured ? "you@example.com" : DEMO_MEMBER_USERNAME}
+                autoComplete={isSupabaseConfigured ? "email" : "username"}
               />
 
               <InputField
