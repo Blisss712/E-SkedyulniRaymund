@@ -28,6 +28,7 @@ import { AdminLoginScreen } from "./features/admin/login"
 import { CoordinatorLoginScreen } from "./features/admin/coordinatorLogin"
 import { useJoinRequests } from "./features/admin/useJoinRequests"
 import { useMyMinistries } from "./features/organizations/useMyMinistries"
+import { eventsForMinistry } from "./features/organizations/ministryScope"
 import { logoutAdmin, getAdminToken } from "./features/admin/api"
 import { AuthScreen } from "./features/auth/AuthScreen"
 import { PasswordResetScreen } from "./features/auth/PasswordResetScreen"
@@ -80,9 +81,11 @@ export default function App() {
   // A request that is still waiting for approval is never the current ministry.
   const ministries = useMyMinistries()
   const [ministryId, setMinistryId] = useState("")
+  /** Approved memberships: the ministries the header's selector can switch between. */
+  const joinedMinistries = ministries.items.filter(item => !item.waiting)
   const ministry: Ministry | null =
-    ministries.items.find(item => item.id === ministryId && !item.waiting) ??
-    ministries.items.find(item => !item.waiting) ??
+    joinedMinistries.find(item => item.id === ministryId) ??
+    joinedMinistries[0] ??
     null
 
   const wizard = useWizard()
@@ -378,6 +381,10 @@ export default function App() {
   }, [loading, authNotice, user])
 
   function renderMemberDashboard(embedded = false) {
+    // The timetable belongs to the ministry named in the header, not to every
+    // ministry the member happens to belong to.
+    const ministryEvents = eventsForMinistry(publishedEvents, ministry)
+
     // Everything the assistant is allowed to know, read from the same state the
     // dashboard already shows. The snapshot filters events to joined ministries.
     const assistantFacts: AssistantFacts = {
@@ -419,7 +426,9 @@ export default function App() {
               overrides={availability.overrides}
               slots={slots.slots}
               error={availability.error}
-              scheduledEvents={publishedEvents}
+              scheduledEvents={ministryEvents}
+              ministryName={ministry?.name}
+              ministryCount={joinedMinistries.length}
               onViewSlot={slot => {
                 slots.setActiveSlot(slot)
                 setDashboardReturnScreen(embedded ? "admin" : "home")

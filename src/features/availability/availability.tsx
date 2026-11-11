@@ -789,6 +789,8 @@ export function AvailabilityTab({
   overrides,
   slots,
   scheduledEvents,
+  ministryName,
+  ministryCount = 0,
   position,
   onPositionChange,
 
@@ -809,6 +811,12 @@ export function AvailabilityTab({
   slots: Slot[]
 
   scheduledEvents: AdminEvent[]
+
+  /** The ministry chosen in the dashboard header; only its events are on the timetable. */
+  ministryName?: string
+
+  /** How many ministries the member belongs to, so the scope note can point at the switcher. */
+  ministryCount?: number
 
   position: TimetablePosition
 
@@ -922,6 +930,17 @@ export function AvailabilityTab({
         Green boxes show when you're free. Red boxes show when you're not
         available. Navy boxes are when you're serving.
       </p>
+
+      {ministryName && (
+        <p className="mt-2 inline-flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-[#1B3A6B]/10 px-3 py-1.5 text-[15px] font-semibold text-[#1B3A6B]">
+          <span>Showing {ministryName} events.</span>
+          {ministryCount > 1 && (
+            <span className="font-medium text-[#475569]">
+              Switch ministries above to see the others.
+            </span>
+          )}
+        </p>
+      )}
 
       <WeekNav
         weekOffset={weekOffset}

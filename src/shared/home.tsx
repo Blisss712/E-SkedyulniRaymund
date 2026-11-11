@@ -190,6 +190,13 @@ export function HomeScreen({
 }) {
   const [showMinistries, setShowMinistries] = useState(false)
 
+  // "Current ministry" is one of the member's approved ministries; requests
+  // still waiting for approval cannot be selected, so they are not counted.
+  const joined = ministries.filter(item => !item.waiting)
+  const ministryPosition = ministry
+    ? joined.findIndex(item => item.id === ministry.id) + 1
+    : 0
+
   // The Availability tab holds the weekly timetable, so it gets the wide layout.
 
   const wide = tab === "availability"
@@ -272,6 +279,9 @@ export function HomeScreen({
             <div>
               <p className="text-[14px] font-semibold text-[#64748B]">
                 Current ministry
+                {joined.length > 1 && ministryPosition > 0
+                  ? ` · ${ministryPosition} of ${joined.length}`
+                  : ""}
               </p>
               <p className="text-xl font-extrabold">
                 {ministry ? `${ministry.name} ▾` : "Join a ministry ▾"}
