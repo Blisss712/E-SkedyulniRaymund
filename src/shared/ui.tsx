@@ -234,6 +234,9 @@ interface InputFieldProps {
   placeholder?: string
 
   autoComplete?: string
+
+  /** Earliest value a date/time input may accept. */
+  min?: string
 }
 
 export function InputField({
@@ -246,6 +249,7 @@ export function InputField({
   error,
   placeholder,
   autoComplete,
+  min,
 }: InputFieldProps) {
   return (
     <div className="flex flex-col gap-2">
@@ -270,6 +274,7 @@ export function InputField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         autoComplete={autoComplete}
+        min={min}
         aria-invalid={!!error}
         className={`w-full min-h-[52px] px-4 text-[17px] rounded-xl border-2 bg-white text-[#1A202C] placeholder-[#94A3B8] transition-colors focus:outline-none focus:border-[#1B3A6B] focus:ring-2 focus:ring-[#1B3A6B]/20 ${
           error

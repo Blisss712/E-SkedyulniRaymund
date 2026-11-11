@@ -3,11 +3,16 @@ import { BACK_TARGETS, type Screen } from "./navigation"
 import { useIsDesktop } from "./shared/ui"
 import { applyStatusBar, listenForBackButton } from "./shared/native"
 import { HomeScreen, type HomeTab, type Ministry } from "./shared/home"
+import { MessagesPanel, ChatScreen } from "./features/messaging/messaging"
+import { useMessaging } from "./features/messaging/MessagingContext"
+import type { ChatConversation } from "./features/messaging/types"
 
 // Wizard
 import { WelcomeScreen, TellNameScreen, JoinGroupScreen, PendingScreen } from "./features/wizard/wizard"
 import { DesktopJoinGroupScreen, DesktopPendingScreen } from "./features/wizard/desktop"
 import { useWizard } from "./features/wizard/useWizard"
+import type { JoinTarget } from "./features/wizard/types"
+import type { MinistryRequestProgress } from "./features/wizard/requestAccess"
 
 // Availability
 import { AvailabilityTab, SetRecurringScreen, AddOverrideScreen } from "./features/availability/availability"
@@ -17,21 +22,34 @@ import { useAvailability } from "./features/availability/useAvailability"
 import { SlotList, SlotVolunteerScreen, SlotServingScreen, SlotFilledScreen } from "./features/slots/slots"
 import { useSlots } from "./features/slots/useSlots"
 import { AdminScreen } from "./features/admin/admin"
+import type { AdminSection } from "./features/admin/admin"
+import { usePublishedEvents } from "./features/admin/usePublishedEvents"
 import { AdminLoginScreen } from "./features/admin/login"
+import { CoordinatorLoginScreen } from "./features/admin/coordinatorLogin"
 import { useJoinRequests } from "./features/admin/useJoinRequests"
 import { useMyMinistries } from "./features/organizations/useMyMinistries"
-import { logoutAdmin } from "./features/admin/api"
+import { logoutAdmin, getAdminToken } from "./features/admin/api"
 import { AuthScreen } from "./features/auth/AuthScreen"
+import { PasswordResetScreen } from "./features/auth/PasswordResetScreen"
 import { useAuth } from "./features/auth/AuthContext"
 import { isPlaceholderName } from "./features/auth/types"
 import {
   authRedirectFailureFromLocation,
   clearAuthRedirectFailure,
+  takeWorkspaceIntent,
 } from "./features/auth/redirect"
 import { isSupabaseConfigured } from "./lib/supabase"
 
 export default function App() {
-  const { user, profile, loading, signOut, completeOnboarding } = useAuth()
+  const {
+    user,
+    profile,
+    loading,
+    passwordRecovery,
+    signOut,
+    completeOnboarding,
+    refreshProfile,
+  } = useAuth()
   const isDesktop = useIsDesktop()
   const [screen, setScreen] = useState<Screen>("welcome")
   const [prevScreen, setPrevScreen] = useState<Screen>("welcome")
@@ -39,8 +57,17 @@ export default function App() {
   // Why the last Google/Facebook attempt failed, when the provider sent the
   // browser back with an error instead of a session.
   const [authNotice, setAuthNotice] = useState("")
+  /** Prefills the password screen when "Forgot password?" is clicked. */
+  const [resetEmail, setResetEmail] = useState("")
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [dashboardReturnScreen, setDashboardReturnScreen] = useState<"home" | "admin">("home")
+  // The admin workspace is unmounted while a chat is open, so this remembers the
+  // section it should reopen on return.
+  const [adminSection, setAdminSection] = useState<AdminSection>("dashboard")
+
+  /** The signed-in account's workspace role; coordinator access is appointment-based. */
+  const workspaceRole = profile?.role === "leader" ? "leader" : "admin"
+  const isCoordinator = profile?.role === "leader"
 
   const [homeTab, setHomeTab] = useState<HomeTab>("availability")
   // The ministries belong to the signed-in member; the selection is just an id.
@@ -56,7 +83,25 @@ export default function App() {
   const availability = useAvailability()
   const slots = useSlots()
   const joinRequests = useJoinRequests()
-  const [activeRequestId, setActiveRequestId] = useState("")
+  // Published events belong on the member's timetable next to their availability.
+  const publishedEvents = usePublishedEvents()
+  // The inbox lives above the screens so unread counts agree everywhere.
+  const messaging = useMessaging()
+  const [activeConversation, setActiveConversation] =
+    useState<ChatConversation | null>(null)
+  const [chatReturnScreen, setChatReturnScreen] = useState<"home" | "admin">(
+    "home",
+  )
+  /** One id per ministry the member just asked to join, in the order sent. */
+  const [activeRequestIds, setActiveRequestIds] = useState<string[]>([])
+
+  /** Refreshes the inbox whenever the member dashboard is shown again. */
+  const refreshMessagesRef = useRef(messaging.refresh)
+  refreshMessagesRef.current = messaging.refresh
+  useEffect(() => {
+    if (screen !== "home") return
+    void refreshMessagesRef.current()
+  }, [screen])
 
   // Memberships and requests change while the member is away (an administrator
   // may approve a request), so re-read them whenever the dashboard opens.
@@ -67,19 +112,36 @@ export default function App() {
     void refreshMinistriesRef.current()
   }, [screen])
 
-  // The review queue is shared with members, so re-read it on every visit.
+  // An administrator can appoint (or remove) this account as a coordinator while
+  // it is signed in, so the dashboard re-reads the role and appointments too.
+  const refreshProfileRef = useRef(refreshProfile)
+  refreshProfileRef.current = refreshProfile
+  useEffect(() => {
+    if (screen !== "home") return
+    void refreshProfileRef.current()
+  }, [screen])
+
+  // The review queue is shared with members, so re-read it on every visit. A
+  // coordinator sees only their ministries' requests (enforced by RLS and the
+  // scoped query), and reviews them in the same grouped queue.
   const refreshJoinRequestsRef = useRef(joinRequests.refresh)
   refreshJoinRequestsRef.current = joinRequests.refresh
   useEffect(() => {
     if (!adminAuthenticated || screen !== "admin") return
+    if (profile?.role !== "admin" && profile?.role !== "leader") return
     void refreshJoinRequestsRef.current()
-  }, [adminAuthenticated, screen])
+  }, [adminAuthenticated, screen, profile?.role])
 
   useEffect(() => {
-    if (screen !== "pending" || !activeRequestId || activeRequestId.startsWith("request-")) return
-    const timer = window.setInterval(() => void joinRequests.refreshRequest(activeRequestId), 3000)
+    if (screen !== "pending") return
+    // `request-` ids only exist in this browser's offline copy.
+    const ids = activeRequestIds.filter(id => !id.startsWith("request-"))
+    if (ids.length === 0) return
+    const timer = window.setInterval(() => {
+      ids.forEach(id => void joinRequests.refreshRequest(id))
+    }, 3000)
     return () => window.clearInterval(timer)
-  }, [screen, activeRequestId])
+  }, [screen, activeRequestIds])
 
   function go(to: Screen) {
     setPrevScreen(screen)
@@ -88,17 +150,85 @@ export default function App() {
 
   function reset() {
     wizard.reset()
-    setActiveRequestId("")
+    setActiveRequestIds([])
+    setActiveConversation(null)
     setHomeTab("availability")
     setMinistryId("")
+    setAdminSection("dashboard")
     availability.resetPosition()
     go("welcome")
+  }
+
+  /** Opens a conversation and remembers which workspace should come back. */
+  function openChat(conversation: ChatConversation, from: "home" | "admin") {
+    setActiveConversation(conversation)
+    setChatReturnScreen(from)
+    go("chat")
+  }
+
+  /** Returns from a conversation and refreshes its preview and unread badge. */
+  function closeChat() {
+    setActiveConversation(null)
+    void messaging.refresh()
+    go(chatReturnScreen)
+  }
+
+  /**
+   * Opens the workspace after the sign-in screen already verified the account.
+   * The screen itself is role-aware: an administrator gets every section, a
+   * coordinator only their own ministries and events.
+   */
+  function enterWorkspace() {
+    setAdminAuthenticated(true)
+    go("admin")
+  }
+
+  /**
+   * Opens the workspace from the member dashboard. The profile is re-read first
+   * because an administrator may have appointed (or removed) this coordinator
+   * while the member was already signed in.
+   */
+  async function openWorkspace() {
+    const fresh = await refreshProfile()
+    const role = fresh?.role ?? profile?.role
+    if (role !== "admin" && role !== "leader") {
+      go("home")
+      return
+    }
+    enterWorkspace()
   }
 
   /** Opens the account screen on the requested tab (sign in or create account). */
   function startAuth(tab: "signin" | "signup") {
     setAuthTab(tab)
     go("auth")
+  }
+
+  /** Opens the set/reset password screen, keeping the email the member typed. */
+  function startPasswordReset(email = "") {
+    setResetEmail(email)
+    go("forgot-password")
+  }
+
+  /**
+   * Leaves the password screen after a successful save. The recovery link has
+   * signed the member in, so continue the same way a normal sign-in would.
+   */
+  async function finishPasswordReset() {
+    setResetEmail("")
+    // The profile load can still be in flight when the password is saved.
+    const current = profile ?? (await refreshProfile())
+    if (current?.role === "admin") {
+      setAdminAuthenticated(true)
+      go("admin")
+      return
+    }
+    if (!current?.onboarded) {
+      prefillName(current?.fullName)
+      go("tell-name")
+      return
+    }
+    go("home")
   }
 
   /** Copies the signed-in account name into the onboarding form when it is still empty. */
@@ -122,25 +252,70 @@ export default function App() {
   prevScreenRef.current = prevScreen
   const dashboardReturnScreenRef = useRef(dashboardReturnScreen)
   dashboardReturnScreenRef.current = dashboardReturnScreen
+  const isCoordinatorRef = useRef(isCoordinator)
+  isCoordinatorRef.current = isCoordinator
+  const closeChatRef = useRef(closeChat)
+  closeChatRef.current = closeChat
   const goRef = useRef(go)
   goRef.current = go
+  const signOutRef = useRef(signOut)
+  signOutRef.current = signOut
   useEffect(() => listenForBackButton(BACK_TARGETS, () => screenRef.current, () => prevScreenRef.current, to => {
     const current = screenRef.current
+    if (current === "chat") {
+      closeChatRef.current()
+      return
+    }
     if (current === "set-recurring" || current === "add-override" || current.startsWith("slot-")) {
       goRef.current(dashboardReturnScreenRef.current)
       return
     }
+    // Leaving the password screen abandons the recovery session rather than
+    // silently signing the member in.
+    if (current === "forgot-password") {
+      void signOutRef.current()
+    }
+    // A coordinator's workspace is entered from their member dashboard, not
+    // from the administrator sign-in screen.
+    if (current === "admin" && isCoordinatorRef.current) {
+      goRef.current("home")
+      return
+    }
     goRef.current(to)
   }), [])
+
+  // A password-recovery link opens the app with a session but is not a normal
+  // sign-in: ask for the new password before showing any dashboard.
+  useEffect(() => {
+    if (!loading && passwordRecovery) {
+      setScreen("forgot-password")
+    }
+  }, [loading, passwordRecovery])
 
   // Resume an existing session (the Supabase session now survives a page reload).
   // This runs at most once, and only while the welcome screen is still showing.
   const resumedSessionRef = useRef(false)
   useEffect(() => {
     if (resumedSessionRef.current || loading || !user || !profile) return
+    // The recovery screen owns this session until the new password is saved.
+    if (passwordRecovery) return
     resumedSessionRef.current = true
     if (screenRef.current !== "welcome") return
     prefillName(profile.fullName)
+
+    // Google/Facebook sign-in from the coordinator screen comes back to a
+    // reloaded page. The intent recorded before leaving decides where it lands.
+    const intent = takeWorkspaceIntent()
+    if (
+      intent === "coordinator" &&
+      profile.onboarded &&
+      (profile.role === "leader" || profile.role === "admin")
+    ) {
+      setAdminAuthenticated(true)
+      setScreen("admin")
+      return
+    }
+
     if (profile.role === "admin") {
       setAdminAuthenticated(true)
       setScreen("admin")
@@ -153,7 +328,7 @@ export default function App() {
       return
     }
     setScreen("home")
-  }, [loading, user, profile])
+  }, [loading, user, profile, passwordRecovery])
 
   /**
    * A refused Google/Facebook login comes back as `?error=access_denied...` in
@@ -172,6 +347,13 @@ export default function App() {
   useEffect(() => {
     if (loading || !authNotice || user) return
     if (screenRef.current !== "welcome") return
+    // A refused Google/Facebook attempt that started on the coordinator screen
+    // returns to that screen. The pending workspace intent is consumed here so a
+    // later sign-in cannot be redirected by an abandoned attempt.
+    if (takeWorkspaceIntent() === "coordinator") {
+      setScreen("coordinator-login")
+      return
+    }
     setAuthTab("signin")
     setScreen("auth")
   }, [loading, authNotice, user])
@@ -190,7 +372,12 @@ export default function App() {
           void signOut()
           reset()
         }}
+        isAdmin={profile?.role === "admin"}
+        onAdmin={openWorkspace}
+        isLeader={profile?.role === "leader"}
+        onLeader={openWorkspace}
         embedded={embedded}
+        unreadMessages={messaging.unreadTotal}
       >
         {homeTab === "availability" ? (
           <AvailabilityTab
@@ -198,7 +385,7 @@ export default function App() {
             overrides={availability.overrides}
             slots={slots.slots}
             error={availability.error}
-            scheduledEvents={[]}
+            scheduledEvents={publishedEvents}
             onViewSlot={slot => {
               slots.setActiveSlot(slot)
               setDashboardReturnScreen(embedded ? "admin" : "home")
@@ -213,13 +400,22 @@ export default function App() {
             onRemoveRecurring={availability.removeRecurring}
             onRemoveOverride={availability.removeOverride}
           />
-        ) : (
+        ) : homeTab === "slots" ? (
           <SlotList
             slots={slots.slots}
             onSlotTap={slot => {
               setDashboardReturnScreen(embedded ? "admin" : "home")
               go(slots.openSlot(slot))
             }}
+          />
+        ) : (
+          <MessagesPanel
+            conversations={messaging.conversations}
+            loading={messaging.loading}
+            error={messaging.error}
+            onOpen={conversation =>
+              openChat(conversation, embedded ? "admin" : "home")
+            }
           />
         )}
       </HomeScreen>
@@ -238,6 +434,7 @@ export default function App() {
           }}
           onSignIn={() => startAuth("signin")}
           onAdmin={() => go("admin-login")}
+          onCoordinator={() => go("coordinator-login")}
         />
       )
 
@@ -253,6 +450,14 @@ export default function App() {
           onAdmin={() => {
             setAuthNotice("")
             go("admin-login")
+          }}
+          onCoordinator={() => {
+            setAuthNotice("")
+            go("coordinator-login")
+          }}
+          onForgotPassword={email => {
+            setAuthNotice("")
+            startPasswordReset(email)
           }}
           onSkip={() => go("tell-name")}
           onSuccess={(signedInProfile, mode) => {
@@ -274,18 +479,56 @@ export default function App() {
         />
       )
 
+    case "forgot-password":
+      return (
+        <PasswordResetScreen
+          mode={passwordRecovery ? "update" : "request"}
+          initialEmail={resetEmail}
+          onBack={() => {
+            setResetEmail("")
+            // The recovery link created a session; leaving without saving a
+            // password should not silently sign the member in.
+            if (passwordRecovery) void signOut()
+            go("auth")
+          }}
+          onDone={finishPasswordReset}
+        />
+      )
+
     case "admin-login":
       return (
         <AdminLoginScreen
           onBack={() => go("welcome")}
-          onAuthenticated={() => {
-            setAdminAuthenticated(true)
-            go("admin")
+          onAuthenticated={() => enterWorkspace()}
+          onCoordinator={() => go("coordinator-login")}
+        />
+      )
+
+    case "coordinator-login":
+      return (
+        <CoordinatorLoginScreen
+          notice={authNotice}
+          onBack={() => {
+            setAuthNotice("")
+            go("welcome")
           }}
+          onAuthenticated={() => enterWorkspace()}
+          onAdmin={() => {
+            setAuthNotice("")
+            go("admin-login")
+          }}
+          onForgotPassword={email => startPasswordReset(email)}
         />
       )
 
     case "admin":
+      // A member who is not (or is no longer) an administrator or coordinator
+      // never sees a workspace: RLS would refuse the data, and the account has
+      // no reason to be here. An administrator signed in through the optional
+      // FastAPI backend holds that token instead of a workspace role.
+      if (profile?.role === "member" && !getAdminToken()) {
+        return renderMemberDashboard()
+      }
       return adminAuthenticated ? (
         <AdminScreen
           adminName={profile?.fullName}
@@ -293,8 +536,21 @@ export default function App() {
           requestError={joinRequests.apiError}
           onApproveRequest={joinRequests.approveRequest}
           onRejectRequest={joinRequests.rejectRequest}
+          role={workspaceRole}
+          leaderOrganizationIds={profile?.leaderOrganizations.map(ministry => ministry.id) ?? []}
+          onOpenConversation={conversation => openChat(conversation, "admin")}
+          initialSection={adminSection}
+          onSectionChange={setAdminSection}
+          logoutLabel={isCoordinator ? "My member dashboard" : "Sign out"}
           onLogout={() => {
             setAdminAuthenticated(false)
+            setAdminSection("dashboard")
+            // A coordinator is a member first: leaving the workspace returns to
+            // their schedule instead of ending the session.
+            if (isCoordinator) {
+              go("home")
+              return
+            }
             void logoutAdmin()
             // An administrator who signed in through Supabase also holds a
             // Supabase session; end it so a reload does not reopen the workspace.
@@ -302,13 +558,18 @@ export default function App() {
             go("welcome")
           }}
         />
+      ) : profile?.role === "leader" ? (
+        <CoordinatorLoginScreen
+          onBack={() => go("welcome")}
+          onAuthenticated={() => enterWorkspace()}
+          onAdmin={() => go("admin-login")}
+          onForgotPassword={email => startPasswordReset(email)}
+        />
       ) : (
         <AdminLoginScreen
           onBack={() => go("welcome")}
-          onAuthenticated={() => {
-            setAdminAuthenticated(true)
-            go("admin")
-          }}
+          onAuthenticated={() => enterWorkspace()}
+          onCoordinator={() => go("coordinator-login")}
         />
       )
 
@@ -332,31 +593,44 @@ export default function App() {
     case "join-group": {
       // Back returns to wherever the member came from: name entry during onboarding, or Home via "+ Join Another Ministry".
       const back = () => go(prevScreen)
-      const submitJoinRequest = async (group: { groupCode: string; groupName: string; organizationId?: string }) => {
-        const requestId = await joinRequests.createRequest({
-            memberName: wizard.form.name || profile?.fullName || "Member",
+      const memberName = wizard.form.name || profile?.fullName || "Member"
+      /**
+       * Each ticked ministry needs its own join request, because a request
+       * belongs to one organization. They are sent together so the member
+       * reaches one pending screen for the whole batch.
+       */
+      const submitJoinRequests = async (groups: JoinTarget[]) => {
+        const requestIds = await Promise.all(groups.map(group =>
+          joinRequests.createRequest({
+            memberName,
             groupCode: group.groupCode,
             groupName: group.groupName,
             organizationId: group.organizationId,
-        })
-        setActiveRequestId(requestId)
-        // The request is now pending, so the dashboard's ministry list changes.
+          }),
+        ))
+        setActiveRequestIds(requestIds)
+        // The requests are now pending, so the dashboard's ministry list changes.
         void ministries.refresh()
         go("pending")
       }
       return isDesktop ? (
-        <DesktopJoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={submitJoinRequest} onBack={back} />
+        <DesktopJoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={submitJoinRequests} onBack={back} />
       ) : (
-        <JoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={submitJoinRequest} onBack={back} />
+        <JoinGroupScreen data={wizard.form} setData={wizard.updateForm} onJoin={submitJoinRequests} onBack={back} />
       )
     }
 
-    case "pending":
+    case "pending": {
+      const progress: MinistryRequestProgress[] = activeRequestIds.map((id, index) => ({
+        name: wizard.form.groupNames?.[index] ?? wizard.form.groupName,
+        status: joinRequests.requests.find(request => request.id === id)?.status ?? "pending",
+      }))
       return isDesktop ? (
-        <DesktopPendingScreen data={wizard.form} status={joinRequests.requests.find(request => request.id === activeRequestId)?.status ?? "pending"} onBack={reset} onApproved={() => go("home")} />
+        <DesktopPendingScreen data={wizard.form} progress={progress} onBack={reset} onApproved={() => go("home")} />
       ) : (
-        <PendingScreen data={wizard.form} status={joinRequests.requests.find(request => request.id === activeRequestId)?.status ?? "pending"} onBack={reset} onApproved={() => go("home")} />
+        <PendingScreen data={wizard.form} progress={progress} onBack={reset} onApproved={() => go("home")} />
       )
+    }
 
     // ─── Home (holds the Availability and Open Slots tabs) ────────────────────
     case "home":
@@ -420,5 +694,15 @@ export default function App() {
 
     case "slot-filled":
       return <SlotFilledScreen onSeeOthers={() => go(dashboardReturnScreen)} />
+
+    // ─── Messages ─────────────────────────────────────────────────────────────
+    case "chat":
+      return activeConversation ? (
+        <ChatScreen
+          conversation={activeConversation}
+          onBack={closeChat}
+          onSwitchConversation={setActiveConversation}
+        />
+      ) : null
   }
 }

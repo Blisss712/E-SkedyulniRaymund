@@ -9,9 +9,23 @@ import {
 
 import { Button, useSheetClose } from "../../shared/ui"
 
+import type { TimetablePosition } from "./types"
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type TimetableColor = "green" | "red" | "navy"
+type TimetableColor = "green" | "red" | "navy" | "gold"
+
+/** What a block means. The administrator's event timeline uses an event's own status. */
+
+type TimetableStatus =
+  | "available"
+  | "unavailable"
+  | "serving"
+  | "event"
+  | "draft"
+  | "published"
+  | "cancelled"
+  | "completed"
 
 /** One block on the weekly timetable. `day` is 0 = Monday … 6 = Sunday. */
 
@@ -26,7 +40,7 @@ export interface TimetableEvent {
 
   label: string // e.g. "Available"
 
-  status: "available" | "unavailable" | "serving"
+  status: TimetableStatus
 
   color: TimetableColor
 
@@ -38,17 +52,29 @@ export interface TimetableEvent {
 
   repeatsWeekly?: boolean
 
+  repeatsMonthly?: boolean
+
   allDay?: boolean // fills the whole visible day; start/end are ignored
 
   action?: { label: string; onClick: () => void } // big button in the details pop-up
 }
 
-const STATUS_TEXT: Record<TimetableEvent["status"], string> = {
+const STATUS_TEXT: Record<TimetableStatus, string> = {
   available: "Available",
 
   unavailable: "Not available",
 
   serving: "Serving",
+
+  event: "Event",
+
+  draft: "Draft",
+
+  published: "Published",
+
+  cancelled: "Cancelled",
+
+  completed: "Completed",
 }
 
 // ─── Constants & helpers ──────────────────────────────────────────────────────
@@ -87,6 +113,11 @@ const TIMETABLE_COLORS: Record<TimetableColor, {
     block: "bg-[#1B3A6B] text-white border-[#142d54]",
     swatch: "bg-[#1B3A6B]",
   },
+
+  gold: {
+    block: "bg-[#FEF3DC] text-[#6B4A0B] border-[#C9921A]",
+    swatch: "bg-[#FEF3DC] border-2 border-[#C9921A]",
+  },
 }
 
 function toMinutes(time: string) {
@@ -117,6 +148,31 @@ function hourLabel(hour: number) {
   return `${hour % 12 || 12}:00 ${hour >= 12 && hour < 24 ? "PM" : "AM"}`
 }
 
+/**
+ * Which timetable day (0 = Monday … 6 = Sunday) a `YYYY-MM-DD` date falls on in
+ * the week starting `weekStart`, or -1 when it is outside that week.
+ */
+
+export function dayInWeek(date: string, weekStart: Date): number {
+  const day = Math.round(
+    (new Date(date + "T12:00:00").getTime() - weekStart.getTime()) / 86_400_000,
+  )
+
+  return day >= 0 && day <= 6 ? day : -1
+}
+
+/** A local `YYYY-MM-DD` key, so a date never shifts across a timezone. */
+
+export function localDateKey(date: Date): string {
+  const year = date.getFullYear()
+
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+
+  const day = String(date.getDate()).padStart(2, "0")
+
+  return `${year}-${month}-${day}`
+}
+
 export function mondayOf(date: Date) {
   const next = new Date(date)
 
@@ -135,6 +191,69 @@ export function addDaysTo(date: Date, amount: number) {
   next.setDate(next.getDate() + amount)
 
   return next
+}
+
+/**
+ * Previous / This Week / Next and the week's date range. Both the member's
+ * availability and the administrator's event timeline use it, so moving between
+ * weeks looks and behaves the same everywhere.
+ */
+
+export function WeekNav({
+  weekOffset,
+  weekStart,
+  onPositionChange,
+}: {
+  weekOffset: number
+
+  weekStart: Date
+
+  onPositionChange: (change: Partial<TimetablePosition>) => void
+}) {
+  const weekEnd = addDaysTo(weekStart, 6)
+
+  return (
+    <>
+      <div className="my-4 grid grid-cols-3 gap-1">
+        <Button
+          variant="ghost"
+          size="compact"
+          onClick={() => onPositionChange({ weekOffset: weekOffset - 1 })}
+          ariaLabel="Previous week"
+        >
+          ‹ Previous
+        </Button>
+        <Button
+          variant={weekOffset === 0 ? "secondary" : "ghost"}
+          size="compact"
+          onClick={() => onPositionChange({ weekOffset: 0 })}
+          className="whitespace-nowrap"
+        >
+          This Week
+        </Button>
+        <Button
+          variant="ghost"
+          size="compact"
+          onClick={() => onPositionChange({ weekOffset: weekOffset + 1 })}
+          ariaLabel="Next week"
+        >
+          Next ›
+        </Button>
+      </div>
+      <p className="mb-4 text-center text-[19px] font-extrabold text-[#1B3A6B]">
+        {weekStart.toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+        })}{" "}
+        –{" "}
+        {weekEnd.toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        })}
+      </p>
+    </>
+  )
 }
 
 function sameDate(a: Date, b: Date) {
@@ -209,10 +328,13 @@ function EventSheet({
   event,
   date,
   onClose,
+  label = "Availability details",
 }: {
   event: TimetableEvent
   date: Date
   onClose: () => void
+  /** The sheet's accessible name: availability for a member, an event for an administrator. */
+  label?: string
 }) {
   const rows: Array<[string, string]> = [
     [
@@ -241,9 +363,13 @@ function EventSheet({
     "How often",
     event.repeatsWeekly
       ? "Repeats every week"
-      : event.status === "serving"
-        ? "One-time"
-        : "One-time change",
+      : event.repeatsMonthly
+        ? "Repeats every month"
+        : // A one-off change to availability reads differently from a single
+          // serving slot, event, or administrator's scheduled event.
+          event.status === "available" || event.status === "unavailable"
+          ? "One-time change"
+          : "One-time",
   ])
 
   const { closing, close } = useSheetClose()
@@ -255,7 +381,7 @@ function EventSheet({
       className="fixed inset-0 z-50 flex items-end justify-center"
       role="dialog"
       aria-modal="true"
-      aria-label="Availability details"
+      aria-label={label}
       data-closing={closing}
     >
       <div
@@ -423,6 +549,8 @@ export function WeeklyTimetable({
   onDayIndexChange,
   layout = "inline", // a Monday
 
+  detailsLabel,
+
   // The view and chosen day are kept by the parent so they survive leaving and returning to this screen.
 
   // "preview": a short, still picture of the first rows (no scrolling, no taps) for the home page.
@@ -444,6 +572,9 @@ export function WeeklyTimetable({
   onDayIndexChange: (index: number) => void
 
   layout?: "inline" | "preview" | "full"
+
+  /** Accessible name of the details sheet; defaults to the member's wording. */
+  detailsLabel?: string
 }) {
   const preview = layout === "preview"
 
@@ -677,7 +808,7 @@ export function WeeklyTimetable({
         <div
           className="mb-4 flex gap-1 rounded-xl bg-[#E8EDF7] p-1"
           role="group"
-          aria-label="How to show your availability"
+          aria-label="How to show the schedule"
         >
           <Button
             variant={view === "week" ? "tabActive" : "tabInactive"}
@@ -832,6 +963,7 @@ export function WeeklyTimetable({
         <EventSheet
           event={selected.event}
           date={selected.date}
+          label={detailsLabel}
           onClose={() => setSelected(null)}
         />
       )}

@@ -45,7 +45,13 @@ function readRequests(): JoinRequest[] {
  *   organization_member_accounts - the membership created when it is approved
  */
 export function useJoinRequests() {
-  const { user } = useAuth()
+  const { user, profile } = useAuth()
+  // A coordinator reviews only the ministries they lead. The database RLS
+  // policy enforces the same scope; this is also what the query asks for.
+  const isCoordinator = profile?.role === "leader"
+  const coordinatorOrganizationIds = isCoordinator
+    ? (profile?.leaderOrganizations ?? []).map(organization => organization.id)
+    : undefined
   const [requests, setRequests] = useState<JoinRequest[]>(() => (remoteRequests ? [] : readRequests()))
   const [apiError, setApiError] = useState("")
 
@@ -72,8 +78,10 @@ export function useJoinRequests() {
 
   /** Reads the requests from whichever backend is in use, without clearing errors. */
   async function pull() {
-    if (isAdminApiConfigured) setRequests(await loadJoinRequests())
-    else if (isSupabaseConfigured) setRequests(await fetchJoinRequests())
+    if (isAdminApiConfigured && !isCoordinator) setRequests(await loadJoinRequests())
+    else if (isSupabaseConfigured) {
+      setRequests(await fetchJoinRequests(coordinatorOrganizationIds))
+    }
   }
 
   async function refresh() {
@@ -154,14 +162,15 @@ export function useJoinRequests() {
         : request,
     ))
 
-    if (isAdminApiConfigured) {
+    if (isAdminApiConfigured && !isCoordinator) {
       void updateJoinRequest(id, status)
         .then(saved => replace(id, saved))
         .catch(reason => failUpdate(reason))
     } else if (isSupabaseConfigured && user) {
       // Approving also inserts the membership row, so the member's dashboard
-      // picks the organization up on its next refresh.
-      void reviewJoinRequest(id, status, user.id)
+      // picks the organization up on its next refresh. A coordinator's decision
+      // goes through the validating RPC, never a direct table write.
+      void reviewJoinRequest(id, status, user.id, { coordinator: isCoordinator })
         .then(saved => replace(id, saved))
         .catch(reason => failUpdate(reason))
     }

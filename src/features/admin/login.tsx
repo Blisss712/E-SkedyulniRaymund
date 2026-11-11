@@ -2,6 +2,7 @@ import { useState } from "react"
 import { BackButton, Button, Card, InputField, Logo, ScreenShell } from "../../shared/ui"
 import { isAdminApiConfigured, loginAdmin } from "./api"
 import { useAuth } from "../auth/AuthContext"
+import type { UserProfile } from "../auth/types"
 import { isSupabaseConfigured } from "../../lib/supabase"
 
 const DEMO_USERNAME = "admin"
@@ -22,9 +23,11 @@ function resolveMode(): SignInMode {
   return "demo"
 }
 
-export function AdminLoginScreen({ onBack, onAuthenticated }: {
+export function AdminLoginScreen({ onBack, onAuthenticated, onCoordinator }: {
   onBack: () => void
-  onAuthenticated: (token?: string) => void
+  onAuthenticated: (profile?: UserProfile) => void
+  /** Opens the separate leader/coordinator sign-in screen. */
+  onCoordinator?: () => void
 }) {
   const { signInAsAdmin } = useAuth()
   const mode = resolveMode()
@@ -49,8 +52,8 @@ export function AdminLoginScreen({ onBack, onAuthenticated }: {
     try {
       if (mode === "api") {
         try {
-          const result = await loginAdmin(id, password)
-          onAuthenticated(result.access_token)
+          await loginAdmin(id, password)
+          onAuthenticated()
         } catch (reason) {
           setError(reason instanceof Error ? reason.message : "The username or password is incorrect.")
         }
@@ -63,7 +66,7 @@ export function AdminLoginScreen({ onBack, onAuthenticated }: {
           setError(result.error || "The email/username or password is incorrect.")
           return
         }
-        onAuthenticated()
+        onAuthenticated(result.profile)
         return
       }
 
@@ -88,7 +91,8 @@ export function AdminLoginScreen({ onBack, onAuthenticated }: {
           <p className="text-xs font-bold uppercase tracking-widest text-gold">Administration</p>
           <p className="mt-2 text-2xl font-bold text-navy">Admin sign in</p>
           <p className="mt-2 text-base leading-relaxed text-muted">
-            Sign in with an administrator account to manage organizations and events.
+            Administrators only. Manage organizations, events, join requests, and ministry
+            coordinators.
           </p>
         </div>
 
@@ -129,7 +133,7 @@ export function AdminLoginScreen({ onBack, onAuthenticated }: {
           )}
 
           <Button type="submit" disabled={loading}>
-            {loading ? "Signing in..." : "Sign in to admin"}
+            {loading ? "Signing in..." : "Sign in as administrator"}
           </Button>
         </form>
 
@@ -139,6 +143,18 @@ export function AdminLoginScreen({ onBack, onAuthenticated }: {
             <span className="font-bold"> admin / admin123</span>. Add the Supabase environment
             variables to sign in with real accounts.
           </p>
+        )}
+
+        {onCoordinator && (
+          <div className="mt-5 border-t border-border pt-5">
+            <button
+              type="button"
+              onClick={onCoordinator}
+              className="w-full text-center text-sm font-bold text-navy hover:underline cursor-pointer"
+            >
+              Ministry coordinator? Leader/Coordinator sign in →
+            </button>
+          </div>
         )}
       </Card>
       <p className="mt-5 text-center text-sm leading-relaxed text-muted">

@@ -4,6 +4,8 @@ import type { AdminEvent, EventDraft, Organization, OrganizationDraft, Organizat
 import { adminApi, isAdminApiConfigured, loadAdminData } from "./api"
 import { isSupabaseConfigured } from "../../lib/supabase"
 import { useAuth } from "../auth/AuthContext"
+import { notifyEventsChanged } from "./eventsSync"
+import { eventSchedule, scheduleIssue, schedulesOverlap } from "./eventSchedule"
 import {
   createOrganizationRow,
   deleteOrganizationRow,
@@ -38,9 +40,35 @@ function today() {
  */
 const remoteData = isAdminApiConfigured || isSupabaseConfigured
 
-export function useAdmin() {
+export type AdminScope = {
+  /**
+   * When set, the workspace is a coordinator's: only these ministries and their
+   * events are listed, and writes outside them are refused. Leaving it
+   * undefined opens the full administrator workspace.
+   */
+  organizationIds?: string[]
+}
+
+export function useAdmin(scope: AdminScope = {}) {
   const { user } = useAuth()
   const userId = user?.id ?? ""
+
+  // The array is rebuilt on every render by some callers, so depend on its
+  // contents rather than its identity.
+  const scopeKey = scope.organizationIds ? [...scope.organizationIds].sort().join(",") : ""
+  const scopedIds = useMemo(
+    () => (scope.organizationIds ? new Set(scope.organizationIds) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scopeKey],
+  )
+  const isScoped = scopedIds !== null
+  // A coordinator's workspace always reads Supabase directly: the optional
+  // FastAPI backend has no coordinator concept (and no token for one).
+  const useRemoteApi = isAdminApiConfigured && !isScoped
+
+  function inScope(organizationId: string) {
+    return !scopedIds || scopedIds.has(organizationId)
+  }
 
   const [organizations, setOrganizations] = useState<Organization[]>(
     remoteData ? [] : INITIAL_ORGANIZATIONS,
@@ -58,7 +86,7 @@ export function useAdmin() {
 
   /** Re-reads organizations and events from whichever backend is in use. */
   async function reload() {
-    if (isAdminApiConfigured) {
+    if (useRemoteApi) {
       const data = await loadAdminData().catch(() => null)
       if (!data) return
       setOrganizations(data.organizations)
@@ -79,7 +107,7 @@ export function useAdmin() {
 
     async function load() {
       try {
-        if (isAdminApiConfigured) {
+        if (useRemoteApi) {
           const data = await loadAdminData()
           if (!active) return
           setOrganizations(data.organizations)
@@ -112,7 +140,7 @@ export function useAdmin() {
     return () => {
       active = false
     }
-  }, [userId])
+  }, [userId, useRemoteApi])
 
   function replaceOrganization(pendingId: string, saved: Organization) {
     setOrganizations(current => current.map(item => (item.id === pendingId ? saved : item)))
@@ -123,6 +151,10 @@ export function useAdmin() {
   }
 
   function saveOrganization(draft: OrganizationDraft, id?: string) {
+    if (isScoped) {
+      return { ok: false, message: "Only an administrator can create or edit ministries." }
+    }
+
     const name = draft.name.trim()
     const duplicate = organizations.some(
       organization => organization.id !== id && organization.name.toLowerCase() === name.toLowerCase(),
@@ -135,7 +167,7 @@ export function useAdmin() {
       setOrganizations(current => current.map(organization =>
         organization.id === id ? { ...organization, ...cleaned } : organization,
       ))
-      if (isAdminApiConfigured) {
+      if (useRemoteApi) {
         void adminApi.updateOrganization(id, cleaned)
           .then(saved => replaceOrganization(id, saved))
           .catch(reportFailure)
@@ -153,7 +185,7 @@ export function useAdmin() {
       createdAt: today(),
     }
     setOrganizations(current => [next, ...current])
-    if (isAdminApiConfigured) {
+    if (useRemoteApi) {
       void adminApi.createOrganization(cleaned)
         .then(saved => replaceOrganization(next.id, saved))
         .catch(reportFailure)
@@ -166,6 +198,8 @@ export function useAdmin() {
   }
 
   function toggleOrganization(id: string) {
+    if (isScoped) return
+
     const current = organizations.find(organization => organization.id === id)
     const status: OrganizationStatus = current?.status === "active" ? "inactive" : "active"
 
@@ -173,7 +207,7 @@ export function useAdmin() {
       organization.id === id ? { ...organization, status } : organization,
     ))
 
-    if (isAdminApiConfigured) {
+    if (useRemoteApi) {
       void adminApi.toggleOrganization(id)
         .then(saved => replaceOrganization(id, saved))
         .catch(reportFailure)
@@ -185,26 +219,41 @@ export function useAdmin() {
   }
 
   function deleteOrganization(id: string) {
+    if (isScoped) return false
     if (events.some(event => event.organizationId === id)) return false
     setOrganizations(current => current.filter(organization => organization.id !== id))
-    if (isAdminApiConfigured) void adminApi.deleteOrganization(id).catch(reportFailure)
+    if (useRemoteApi) void adminApi.deleteOrganization(id).catch(reportFailure)
     else if (isSupabaseConfigured) void deleteOrganizationRow(id).catch(reportFailure)
     return true
   }
 
-  function saveEvent(draft: EventDraft, id?: string) {
+  function saveEvent(
+    draft: EventDraft,
+    id?: string,
+  ): { ok: boolean; id?: string; message?: string } {
+    if (!inScope(draft.organizationId)) {
+      return {
+        ok: false,
+        message: "You can only schedule events for a ministry you coordinate.",
+      }
+    }
+
     if (id) {
       setEvents(current => current.map(event => event.id === id ? { ...event, ...draft } : event))
-      if (isAdminApiConfigured) {
+      if (useRemoteApi) {
         void adminApi.updateEvent(id, draft)
           .then(saved => replaceEvent(id, saved))
           .catch(reportFailure)
+          .finally(notifyEventsChanged)
       } else if (isSupabaseConfigured) {
         void updateEventRow(id, draft)
           .then(saved => replaceEvent(id, saved))
           .catch(reportFailure)
+          .finally(notifyEventsChanged)
+      } else {
+        notifyEventsChanged()
       }
-      return id
+      return { ok: true, id }
     }
     const next: AdminEvent = {
       ...draft,
@@ -212,21 +261,25 @@ export function useAdmin() {
       createdAt: today(),
     }
     setEvents(current => [next, ...current])
-    if (isAdminApiConfigured) {
+    if (useRemoteApi) {
       void adminApi.createEvent(draft)
         .then(saved => replaceEvent(next.id, saved))
         .catch(reportFailure)
+        .finally(notifyEventsChanged)
     } else if (isSupabaseConfigured) {
       void createEventRow(next.id, draft)
         .then(saved => replaceEvent(next.id, saved))
         .catch(reportFailure)
+        .finally(notifyEventsChanged)
+    } else {
+      notifyEventsChanged()
     }
-    return next.id
+    return { ok: true, id: next.id }
   }
 
   function duplicateEvent(id: string) {
     const source = events.find(event => event.id === id)
-    if (!source) return null
+    if (!source || !inScope(source.organizationId)) return null
     const duplicate: AdminEvent = {
       ...source,
       id: makeId("event"),
@@ -235,58 +288,88 @@ export function useAdmin() {
       createdAt: today(),
     }
     setEvents(current => [duplicate, ...current])
-    if (isAdminApiConfigured) {
+    if (useRemoteApi) {
       void adminApi.duplicateEvent(id)
         .then(saved => replaceEvent(duplicate.id, saved))
         .catch(reportFailure)
+        .finally(notifyEventsChanged)
     } else if (isSupabaseConfigured) {
       const { id: _sourceId, createdAt: _createdAt, ...draft } = duplicate
       void createEventRow(duplicate.id, draft)
         .then(saved => replaceEvent(duplicate.id, saved))
         .catch(reportFailure)
+        .finally(notifyEventsChanged)
+    } else {
+      notifyEventsChanged()
     }
     return duplicate.id
   }
 
   function cancelEvent(id: string) {
+    const source = events.find(event => event.id === id)
+    if (!source || !inScope(source.organizationId)) return
     setEvents(current => current.map(event => event.id === id ? { ...event, status: "cancelled" } : event))
-    if (isAdminApiConfigured) void adminApi.cancelEvent(id).catch(reportFailure)
-    else if (isSupabaseConfigured) {
+    if (useRemoteApi) {
+      void adminApi.cancelEvent(id).catch(reportFailure).finally(notifyEventsChanged)
+    } else if (isSupabaseConfigured) {
       void setEventStatusRow(id, "cancelled")
         .then(saved => replaceEvent(id, saved))
         .catch(reportFailure)
+        .finally(notifyEventsChanged)
+    } else {
+      notifyEventsChanged()
     }
   }
 
   function deleteEvent(id: string) {
+    const source = events.find(event => event.id === id)
+    if (!source || !inScope(source.organizationId)) return
     setEvents(current => current.filter(event => event.id !== id))
-    if (isAdminApiConfigured) void adminApi.deleteEvent(id).catch(reportFailure)
-    else if (isSupabaseConfigured) void deleteEventRow(id).catch(reportFailure)
+    if (useRemoteApi) {
+      void adminApi.deleteEvent(id).catch(reportFailure).finally(notifyEventsChanged)
+    } else if (isSupabaseConfigured) {
+      void deleteEventRow(id).catch(reportFailure).finally(notifyEventsChanged)
+    } else {
+      notifyEventsChanged()
+    }
   }
 
   function findConflict(draft: EventDraft, editingId?: string) {
-    const start = new Date(draft.startsAt).getTime()
-    const end = new Date(draft.endsAt).getTime()
-    if (!start || !end || end <= start) return null
-    return events.find(event => {
+    const schedule = eventSchedule(draft)
+    if (scheduleIssue(schedule)) return null
+    return visibleEvents.find(event => {
       if (event.id === editingId || event.status === "cancelled") return false
       const sameContext =
         event.organizationId === draft.organizationId ||
         (event.location.trim() && event.location.toLowerCase() === draft.location.trim().toLowerCase())
-      return sameContext && start < new Date(event.endsAt).getTime() && end > new Date(event.startsAt).getTime()
+      if (!sameContext) return false
+      const other = eventSchedule(event)
+      if (scheduleIssue(other)) return false
+      return schedulesOverlap(schedule, other)
     }) ?? null
   }
 
+  const visibleOrganizations = useMemo(
+    () => (scopedIds ? organizations.filter(organization => scopedIds.has(organization.id)) : organizations),
+    [organizations, scopedIds],
+  )
+
+  const visibleEvents = useMemo(
+    () => (scopedIds ? events.filter(event => scopedIds.has(event.organizationId)) : events),
+    [events, scopedIds],
+  )
+
   const metrics = useMemo(() => ({
-    activeOrganizations: organizations.filter(organization => organization.status === "active").length,
-    publishedEvents: events.filter(event => event.status === "published").length,
-    draftEvents: events.filter(event => event.status === "draft").length,
-    upcomingEvents: events.filter(event => event.status === "published" && new Date(event.startsAt) > new Date()).length,
-  }), [events, organizations])
+    activeOrganizations: visibleOrganizations.filter(organization => organization.status === "active").length,
+    publishedEvents: visibleEvents.filter(event => event.status === "published").length,
+    draftEvents: visibleEvents.filter(event => event.status === "draft").length,
+    upcomingEvents: visibleEvents.filter(event => event.status === "published" && new Date(event.startsAt) > new Date()).length,
+  }), [visibleEvents, visibleOrganizations])
 
   return {
-    organizations,
-    events,
+    organizations: visibleOrganizations,
+    events: visibleEvents,
+    scoped: isScoped,
     metrics,
     error,
     loading,

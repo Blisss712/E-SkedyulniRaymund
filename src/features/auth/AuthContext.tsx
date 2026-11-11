@@ -1,4 +1,4 @@
-﻿import {
+import {
   createContext,
   useContext,
   useEffect,
@@ -6,15 +6,45 @@
   type ReactNode,
 } from "react"
 import type { Session, User } from "@supabase/supabase-js"
-import { supabase, isSupabaseConfigured } from "../../lib/supabase"
+import {
+  supabase,
+  isSupabaseConfigured,
+  openedFromPasswordRecoveryLink,
+} from "../../lib/supabase"
 import {
   isPlaceholderName,
   type SocialProvider,
   type AuthContextType,
+  type AuthErrorCode,
+  type AuthResult,
   type UserProfile,
 } from "./types"
+import { fetchMyLeaderships, type LeaderMinistry } from "../organizations/leaders"
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+
+/**
+ * A project that has not run supabase/organization_leaders.sql has no
+ * appointments table. That is not an error the member can act on, so it is
+ * logged once and treated as "no coordinator assignments" rather than blocking
+ * sign-in.
+ */
+let leadershipLookupWarned = false
+
+async function loadLeaderships(userId: string): Promise<LeaderMinistry[]> {
+  try {
+    return await fetchMyLeaderships(userId)
+  } catch (reason) {
+    if (!leadershipLookupWarned) {
+      leadershipLookupWarned = true
+      console.warn(
+        "Coordinator assignments are unavailable. Run supabase/organization_leaders.sql in the Supabase SQL editor to enable ministry coordinators.",
+        reason,
+      )
+    }
+    return []
+  }
+}
 
 /** The `member_profiles` columns this app reads. */
 type MemberProfileRow = {
@@ -87,11 +117,110 @@ function normalizePhone(phone: string): string {
   return withPlus
 }
 
+/**
+ * Maps a Supabase Auth error to a reason the screens can act on.
+ *
+ * Supabase reports a Google/Facebook-only account and a wrong password with the
+ * same "Invalid login credentials" message; both mean the password check failed.
+ */
+function classifyAuthError(error: {
+  message?: string
+  code?: string
+}): AuthErrorCode {
+  const code = (error.code ?? "").toLowerCase()
+  const message = (error.message ?? "").toLowerCase()
+
+  if (
+    code.includes("invalid_credentials") ||
+    message.includes("invalid login credentials")
+  ) {
+    return "invalid_credentials"
+  }
+  if (
+    code.includes("email_not_confirmed") ||
+    message.includes("email not confirmed")
+  ) {
+    return "email_not_confirmed"
+  }
+  if (
+    code.includes("user_already_exists") ||
+    code.includes("email_exists") ||
+    message.includes("already registered")
+  ) {
+    return "account_exists"
+  }
+  if (
+    code.includes("rate_limit") ||
+    message.includes("rate limit") ||
+    message.includes("too many")
+  ) {
+    return "rate_limited"
+  }
+  if (code.includes("weak_password")) return "weak_password"
+  return "unknown"
+}
+
+/** The sign-in failure shown on a form, with the way out of the Google trap. */
+function describeSignInFailure(
+  error: { message?: string; code?: string },
+  surface: "member" | "admin" | "coordinator",
+): string {
+  const kind = classifyAuthError(error)
+
+  if (kind === "invalid_credentials") {
+    if (surface === "admin") {
+      return "That email/username and password don't match an administrator account."
+    }
+    const wayOut =
+      surface === "coordinator"
+        ? "set a password for it below"
+        : "use \"Forgot password?\" to set one"
+    return `That email and password don't match an account. If you created this account with Google or Facebook, it has no password yet — continue with that button, or ${wayOut}.`
+  }
+
+  if (kind === "email_not_confirmed") {
+    return "Confirm your email address first: open the confirmation link Supabase emailed you, then sign in."
+  }
+
+  if (kind === "rate_limited") {
+    return "Too many attempts. Wait a minute, then try again."
+  }
+
+  return error.message?.trim() || "Unable to sign in. Please try again."
+}
+
+/** The sign-up failure shown on the Create Account form. */
+function describeSignUpFailure(error: {
+  message?: string
+  code?: string
+}): string {
+  const kind = classifyAuthError(error)
+  if (kind === "account_exists") {
+    return "An account with this email already exists. If you created it with Google or Facebook, continue with that button; to use email and password, set a password first."
+  }
+  if (kind === "rate_limited") {
+    return "Too many attempts. Wait a minute, then try again."
+  }
+  if (kind === "weak_password") {
+    return "That password is too weak. Use at least 6 characters and avoid a password you have used here before."
+  }
+  return error.message?.trim() || "Unable to register. Please check your details."
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [loading, setLoading] = useState(true)
+  /**
+   * True during the one-time session a password-recovery email link creates.
+   * While it is set, the app shows "choose a new password" instead of treating
+   * the member as signed in. This is what lets a Google/Facebook account add a
+   * password for the email sign-in form.
+   */
+  const [passwordRecovery, setPasswordRecovery] = useState(
+    openedFromPasswordRecoveryLink,
+  )
 
   /**
    * Guarantees the signed-in user has a `member_profiles` row.
@@ -149,13 +278,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const fallbackName =
       metaName || userEmail.split("@")[0] || "Member"
 
-    const fallbackProfile: UserProfile = {
+    // Used when the profile tables cannot be reached at all; sign-in still
+    // succeeds, just without coordinator access.
+    const baseProfile: UserProfile = {
       id: userId,
       email: userEmail,
       fullName: fallbackName,
       role: "member",
       active: true,
       onboarded: metadataOnboarded,
+      leaderOrganizations: [],
     }
 
     try {
@@ -175,12 +307,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           role: "admin",
           active: true,
           onboarded: true,
+          leaderOrganizations: [],
         }
         setProfile(adminProfile)
         return adminProfile
       }
 
-      // 2. Check if user is a member
+      // 2. Coordinator appointments. Read before the member row so the role can
+      // be resolved once: an appointment is what grants the limited workspace.
+      const leaderships = await loadLeaderships(userId)
+      const role = leaderships.length > 0 ? "leader" : "member"
+
+      const fallbackProfile: UserProfile = {
+        id: userId,
+        email: userEmail,
+        fullName: fallbackName,
+        role,
+        active: true,
+        onboarded: metadataOnboarded,
+        leaderOrganizations: leaderships,
+      }
+
+      // 3. Check if user is a member
       let row: MemberProfileRow | null = null
       let hasOnboardedColumn = true
 
@@ -217,19 +365,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             metaName ||
             userEmail.split("@")[0] ||
             "Member",
-          role: "member",
+          role,
           active: row.active,
           onboarded: resolveOnboarded(
             row.onboarded,
             hasOnboardedColumn,
             metadataOnboarded,
           ),
+          leaderOrganizations: leaderships,
         }
         setProfile(memberProfile)
         return memberProfile
       }
 
-      // 3. Repair the missing profile row, then fall back to user metadata
+      // 4. Repair the missing profile row, then fall back to user metadata
       await ensureMemberProfile(
         userId,
         userEmail,
@@ -241,8 +390,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error("Error fetching user profile:", err)
       // Sign-in must succeed even if the profile tables are unreachable.
-      setProfile(fallbackProfile)
-      return fallbackProfile
+      setProfile(baseProfile)
+      return baseProfile
     }
   }
 
@@ -265,7 +414,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Listen for auth state changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+    } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true)
       setSession(newSession)
       setUser(newSession?.user ?? null)
       if (newSession?.user) {
@@ -284,10 +434,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function signInWithEmail(
     email: string,
     password: string,
-  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<AuthResult> {
     if (!isSupabaseConfigured) {
       return {
         ok: false,
+        code: "unavailable",
         error: "Authentication is not configured. Add the Supabase environment variables.",
       }
     }
@@ -299,7 +450,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
 
       if (error) {
-        return { ok: false, error: error.message }
+        return {
+          ok: false,
+          code: classifyAuthError(error),
+          error: describeSignInFailure(error, "member"),
+        }
       }
 
       let userProfile: UserProfile | null = null
@@ -317,30 +472,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function signInAsAdmin(identifier: string, password: string): Promise<{
-    ok: boolean
-    error?: string
-    profile?: UserProfile
-  }> {
+  /**
+   * Shared password check for the two separate workspace sign-in forms.
+   *
+   * `expected` decides which kind of account may continue: the admin form
+   * accepts only an administrator, and the leader/coordinator form accepts only
+   * an account an administrator appointed to a ministry. A valid password for
+   * the wrong kind of account is signed out again with a message pointing at
+   * the correct form.
+   */
+  async function signInToWorkspace(
+    identifier: string,
+    password: string,
+    expected: "admin" | "leader",
+  ): Promise<AuthResult> {
+    const isAdminForm = expected === "admin"
     const cleanId = identifier.trim()
+
     if (!cleanId || !password) {
       return {
         ok: false,
-        error: "Enter your admin email or username and password.",
+        error: isAdminForm
+          ? "Enter your admin email or username and password."
+          : "Enter the email and password of your coordinator account.",
       }
     }
 
     if (!isSupabaseConfigured) {
       return {
         ok: false,
-        error: "Authentication is not configured. Add the Supabase environment variables.",
+        error: isAdminForm
+          ? "Authentication is not configured. Add the Supabase environment variables."
+          : "Coordinator sign in needs the Supabase environment variables.",
       }
     }
 
     // Supabase Auth only accepts an email address. `get_admin_email()` maps the
     // username stored in admin_profiles to that email before the password check.
+    // Coordinators are ordinary members, so they sign in with their own email.
     let emailToUse = cleanId.toLowerCase()
-    if (!cleanId.includes("@")) {
+    if (isAdminForm && !cleanId.includes("@")) {
       const { data: resolvedEmail, error: resolveError } = await supabase.rpc(
         "get_admin_email",
         { p_identifier: cleanId },
@@ -357,11 +528,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (typeof resolvedEmail !== "string" || !resolvedEmail) {
         return {
           ok: false,
-          error: `No administrator account uses the username "${cleanId}". Try your email address instead.`,
+          error: `No administrator username "${cleanId}" was found.`,
         }
       }
 
       emailToUse = resolvedEmail
+    } else if (!isAdminForm && !cleanId.includes("@")) {
+      return {
+        ok: false,
+        error: "Coordinators sign in with the email address on their account.",
+      }
     }
 
     try {
@@ -371,7 +547,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
 
       if (error) {
-        return { ok: false, error: error.message }
+        return {
+          ok: false,
+          code: classifyAuthError(error),
+          error: describeSignInFailure(
+            error,
+            isAdminForm ? "admin" : "coordinator",
+          ),
+        }
       }
 
       if (!data.user) {
@@ -381,17 +564,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // The password was valid, but only admin_profiles grants the workspace.
+      // The password was valid, but the account also has to hold the role the
+      // form is for.
       const resolvedProfile = await fetchProfile(data.user, emailToUse)
+      const signedInEmail = data.user.email || emailToUse
 
-      if (resolvedProfile?.role !== "admin") {
+      if (resolvedProfile?.role !== expected) {
         await supabase.auth.signOut()
         setUser(null)
         setSession(null)
         setProfile(null)
+
+        if (resolvedProfile?.role === "admin") {
+          return {
+            ok: false,
+            error: `${signedInEmail} is an administrator account. Use the Admin sign in.`,
+          }
+        }
+        if (resolvedProfile?.role === "leader") {
+          return {
+            ok: false,
+            error: `${signedInEmail} is a ministry coordinator account. Use the Leader/Coordinator sign in.`,
+          }
+        }
         return {
           ok: false,
-          error: `${data.user.email || emailToUse} signed in, but it is not an administrator yet. An existing administrator must promote it by running the SQL in supabase/promote_to_admin.sql in the Supabase SQL editor.`,
+          error: isAdminForm
+            ? `${signedInEmail} signed in, but it is not an administrator. If you are a ministry coordinator, use the Leader/Coordinator sign in; otherwise an existing administrator must promote it with supabase/promote_to_admin.sql.`
+            : `${signedInEmail} signed in, but it is not appointed as a ministry coordinator yet. Ask an administrator to appoint it in the Administrator Workspace → Coordinators.`,
         }
       }
 
@@ -402,19 +602,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         error:
           err instanceof Error
             ? err.message
-            : "An unexpected error occurred during admin sign in.",
+            : "An unexpected error occurred during sign in.",
       }
     }
+  }
+
+  /** Administrator-only form: email/username + password. */
+  async function signInAsAdmin(
+    identifier: string,
+    password: string,
+  ): Promise<AuthResult> {
+    return signInToWorkspace(identifier, password, "admin")
+  }
+
+  /** Leader/coordinator form: the account email + password. */
+  async function signInAsCoordinator(
+    identifier: string,
+    password: string,
+  ): Promise<AuthResult> {
+    return signInToWorkspace(identifier, password, "leader")
   }
 
   async function signUpWithEmail(
     email: string,
     password: string,
     fullName: string,
-  ): Promise<{ ok: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<AuthResult> {
     if (!isSupabaseConfigured) {
       return {
         ok: false,
+        code: "unavailable",
         error: "Authentication is not configured. Add the Supabase environment variables.",
       }
     }
@@ -431,7 +648,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
 
       if (error) {
-        return { ok: false, error: error.message }
+        return {
+          ok: false,
+          code: classifyAuthError(error),
+          error: describeSignUpFailure(error),
+        }
+      }
+
+      // When the email already belongs to an account, Supabase deliberately
+      // answers with an obfuscated user that has no identities instead of an
+      // error. Without this check the form used to claim "Account created!" for
+      // an existing — often Google-created — account that got no password.
+      if (data.user && (data.user.identities?.length ?? 0) === 0) {
+        return {
+          ok: false,
+          code: "account_exists",
+          error:
+            "This email cannot be registered again. If it already has an account — for example, one created with Google or Facebook — sign in with that button, or use \"Forgot password?\" to add a password for email sign-in.",
+        }
       }
 
       // If Supabase has email confirmation enabled, data.session may be null until confirmed
@@ -490,8 +724,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  /**
+   * Sends the SMS code for phone sign-in.
+   *
+   * `createUser` is false for the coordinator form: a number that holds no
+   * account cannot have been appointed to a ministry, so creating one would only
+   * produce a member account that the role check turns away a moment later.
+   */
   async function signInWithPhone(
     phone: string,
+    options?: { createUser?: boolean },
   ): Promise<{ ok: boolean; error?: string; message?: string }> {
     if (!isSupabaseConfigured) {
       return {
@@ -512,11 +754,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { error } = await supabase.auth.signInWithOtp({
         phone: normalized,
         options: {
-          shouldCreateUser: true,
+          shouldCreateUser: options?.createUser ?? true,
         },
       })
 
       if (error) {
+        // With sign-ups disabled Supabase refuses an unknown number with
+        // "Signups not allowed for otp" instead of sending a code.
+        if (/signups? not allowed/i.test(error.message)) {
+          return {
+            ok: false,
+            error:
+              options?.createUser === false
+                ? "That mobile number is not linked to a coordinator account yet. Ask an administrator to appoint your account first, then try again."
+                : "Phone sign-up is disabled for this project. Enable phone sign-ins in Supabase Authentication → Providers → Phone.",
+          }
+        }
         return { ok: false, error: error.message }
       }
 
@@ -565,6 +818,184 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return {
         ok: false,
         error: err instanceof Error ? err.message : "An unexpected error occurred.",
+      }
+    }
+  }
+
+  /**
+   * Leader/coordinator phone sign-in, step 1: text a code to the number already
+   * on an account. The member form creates accounts, this one never does.
+   */
+  async function sendCoordinatorPhoneCode(
+    phone: string,
+  ): Promise<{ ok: boolean; error?: string; message?: string }> {
+    return signInWithPhone(phone, { createUser: false })
+  }
+
+  /**
+   * Leader/coordinator phone sign-in, step 2: verify the code, then apply the
+   * same appointment rule as the password form.
+   *
+   * A valid code only proves the number; it does not prove the account is a
+   * coordinator. The session created by the code is ended again when the account
+   * turns out to be an ordinary member or an administrator, so a phone sign-in
+   * cannot be used to slip into the member dashboard from this screen.
+   */
+  async function verifyCoordinatorPhoneOtp(
+    phone: string,
+    token: string,
+  ): Promise<AuthResult> {
+    if (!isSupabaseConfigured) {
+      return {
+        ok: false,
+        code: "unavailable",
+        error: "Coordinator sign in needs the Supabase environment variables.",
+      }
+    }
+
+    const verified = await verifyPhoneOtp(phone, token)
+    if (!verified.ok) {
+      return { ok: false, error: verified.error }
+    }
+
+    const resolvedProfile = verified.profile
+    if (resolvedProfile?.role === "leader") {
+      return { ok: true, profile: resolvedProfile }
+    }
+
+    await supabase.auth.signOut()
+    setUser(null)
+    setSession(null)
+    setProfile(null)
+
+    if (resolvedProfile?.role === "admin") {
+      return {
+        ok: false,
+        error:
+          "That mobile number belongs to an administrator account. Use the Admin sign in.",
+      }
+    }
+    return {
+      ok: false,
+      error: `${resolvedProfile?.email || "That mobile number"} signed in, but it is not appointed as a ministry coordinator yet. Ask an administrator to appoint it in the Administrator Workspace → Coordinators.`,
+    }
+  }
+
+  /**
+   * Emails a password-recovery link.
+   *
+   * This is also the supported way for a Google/Facebook account to gain a
+   * password: those accounts are created without one, so the email/password form
+   * can never verify them until a password is set. The same account is kept —
+   * same ministries, requests, and profile — because the link signs the member
+   * into it before the new password is saved.
+   */
+  async function sendPasswordReset(email: string): Promise<AuthResult> {
+    if (!isSupabaseConfigured) {
+      return {
+        ok: false,
+        code: "unavailable",
+        error:
+          "Password email is not configured. Add the Supabase environment variables.",
+      }
+    }
+
+    const cleanEmail = email.trim().toLowerCase()
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      return {
+        ok: false,
+        error: "Enter the email address on your account.",
+      }
+    }
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+        // The link comes back to the app, where PasswordResetScreen asks for the
+        // new password. `type=recovery` in the fragment survives the redirect.
+        redirectTo: window.location.origin,
+      })
+
+      if (error) {
+        const code = classifyAuthError(error)
+        return {
+          ok: false,
+          code,
+          error:
+            code === "rate_limited"
+              ? "Too many password emails were requested. Wait a few minutes, then try again."
+              : error.message?.trim() ||
+                "Unable to send the password email. Please try again.",
+        }
+      }
+
+      return { ok: true }
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        error:
+          err instanceof Error ? err.message : "An unexpected error occurred.",
+      }
+    }
+  }
+
+  /** Saves the new password for the account opened by the recovery link. */
+  async function updatePassword(password: string): Promise<AuthResult> {
+    if (!isSupabaseConfigured) {
+      return {
+        ok: false,
+        code: "unavailable",
+        error:
+          "Password setup is not configured. Add the Supabase environment variables.",
+      }
+    }
+
+    if (password.length < 6) {
+      return {
+        ok: false,
+        code: "weak_password",
+        error: "Use at least 6 characters.",
+      }
+    }
+
+    if (!user) {
+      return {
+        ok: false,
+        code: "recovery_link_invalid",
+        error:
+          "Open the link from the password email on this device, then choose the new password.",
+      }
+    }
+
+    try {
+      const { error } = await supabase.auth.updateUser({ password })
+
+      if (error) {
+        if (/different from the old/i.test(error.message)) {
+          return {
+            ok: false,
+            code: "weak_password",
+            error: "That is your current password. Choose a new one.",
+          }
+        }
+        return {
+          ok: false,
+          code: classifyAuthError(error),
+          error:
+            error.message?.trim() ||
+            "Unable to save the new password. Please try again.",
+        }
+      }
+
+      setPasswordRecovery(false)
+      // Re-read the profile so the name and coordinator role are unchanged now
+      // that the session is a normal one.
+      void fetchProfile(user)
+      return { ok: true }
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        error:
+          err instanceof Error ? err.message : "An unexpected error occurred.",
       }
     }
   }
@@ -639,9 +1070,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
     setSession(null)
     setProfile(null)
+    setPasswordRecovery(false)
+  }
+
+  /**
+   * Re-reads the signed-in account's role and coordinator appointments.
+   *
+   * Appointments are made by an administrator while the coordinator may already
+   * be signed in, so the workspace re-checks them instead of trusting the
+   * profile loaded at sign-in.
+   */
+  async function refreshProfile(): Promise<UserProfile | null> {
+    if (!user) return null
+    return (await fetchProfile(user)) ?? null
   }
 
   const isAdmin = profile?.role === "admin"
+
+  const isLeader = profile?.role === "leader"
 
   const needsName = Boolean(user && profile && isPlaceholderName(profile.fullName))
 
@@ -652,14 +1098,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session,
         profile,
         isAdmin,
+        isLeader,
         loading,
         needsName,
+        passwordRecovery,
+        refreshProfile,
         signInWithEmail,
         signInAsAdmin,
+        signInAsCoordinator,
         signUpWithEmail,
         signInWithProvider,
         signInWithPhone,
+        sendCoordinatorPhoneCode,
+        verifyCoordinatorPhoneOtp,
         verifyPhoneOtp,
+        sendPasswordReset,
+        updatePassword,
         completeOnboarding,
         signOut,
       }}

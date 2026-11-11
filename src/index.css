@@ -98,7 +98,8 @@ body {
   }
 }
 
-/* Android / phone notch safe area. The home screen's navy header handles its own top inset. */
-body:not([data-screen="home"]) {
+/* Android / phone notch safe area. The home screen's navy header and the chat
+   header handle their own top inset. */
+body:not([data-screen="home"]):not([data-screen="chat"]) {
   padding-top: env(safe-area-inset-top, 0px);
 }

@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS public.organization_join_requests (
         CHECK (status IN ('pending', 'approved', 'rejected')),
     requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     reviewed_at TIMESTAMPTZ,
-    reviewed_by UUID REFERENCES public.admin_profiles(user_id) ON DELETE SET NULL,
+    reviewed_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     reviewer_note TEXT NOT NULL DEFAULT ''
 );
 

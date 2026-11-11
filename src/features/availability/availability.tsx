@@ -9,13 +9,16 @@ import type {
 
 import { DAYS_ORDER } from "./data"
 
-import { Button, useSheetClose } from "../../shared/ui"
+import { useSheetClose } from "../../shared/ui"
 
 import { slotTimeTo24h, type Slot } from "../../shared/slot"
 
 import {
   WeeklyTimetable,
+  WeekNav,
   addDaysTo,
+  dayInWeek,
+  localDateKey,
   mondayOf,
   type TimetableEvent,
 } from "./timetable"
@@ -25,6 +28,7 @@ import {
   type Assignment,
 } from "../../integration/assignments"
 import type { AdminEvent } from "../admin/types"
+import { eventOccurrences, eventSchedule, formatEventDates } from "../admin/eventSchedule"
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -80,23 +84,6 @@ function addMinutes(time: string, minutes: number): string {
   const total = hour * 60 + minute + minutes
 
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`
-}
-
-/** Which timetable day (0 = Monday … 6 = Sunday) a "YYYY-MM-DD" date falls on in the week starting `weekStart`, or -1 if outside it. */
-
-function dayInWeek(date: string, weekStart: Date): number {
-  const day = Math.round(
-    (new Date(date + "T12:00:00").getTime() - weekStart.getTime()) / 86_400_000,
-  )
-
-  return day >= 0 && day <= 6 ? day : -1
-}
-
-function localDateKey(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, "0")
-  const day = String(date.getDate()).padStart(2, "0")
-  return `${year}-${month}-${day}`
 }
 
 /**
@@ -220,51 +207,36 @@ function availabilityEvents(
     })
   }
 
+  const weekStartKey = localDateKey(weekStart)
+  const weekEndKey = localDateKey(addDaysTo(weekStart, 6))
+
   for (const event of scheduledEvents) {
     if (event.status !== "published") continue
 
-    const start = new Date(event.startsAt)
-    const end = new Date(event.endsAt)
-    const repeatUntil = event.repeatUntil
-      ? new Date(`${event.repeatUntil}T23:59:59`)
-      : start
-    const startDateKey = localDateKey(start)
-    const repeatUntilDateKey = localDateKey(repeatUntil)
-    const cursor = new Date(weekStart)
+    const schedule = eventSchedule(event)
 
-    for (let day = 0; day < 7; day += 1) {
-      const date = new Date(cursor)
-      date.setDate(cursor.getDate() + day)
-      const sameDay =
-        event.recurrence === "weekly"
-          ? date.getDay() === start.getDay()
-          : event.recurrence === "monthly"
-            ? date.getDate() === start.getDate()
-            : localDateKey(date) === startDateKey
+    // A multi-day event shows one block on each of its days, always using the
+    // same daily time range.
+    for (const block of eventOccurrences(event, weekStartKey, weekEndKey)) {
+      const day = dayInWeek(block.date, weekStart)
 
-      if (
-        !sameDay ||
-        localDateKey(date) > repeatUntilDateKey ||
-        localDateKey(date) < startDateKey
-      )
-        continue
-
-      const startTime = `${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`
-      const endTime = `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`
+      if (day < 0) continue
 
       events.push({
-        id: `scheduled-${event.id}-${date.toISOString().slice(0, 10)}`,
+        id: `scheduled-${event.id}-${block.date}`,
         day,
-        start: startTime,
-        end: endTime,
+        start: block.start,
+        end: block.end,
         label: event.title,
-        status: "serving",
+        status: "event",
         color: "navy",
         detail: event.location,
         rows: [
-          ["Organization", event.organizationId],
+          ["Dates", formatEventDates(schedule)],
           ["Visibility", event.visibility === "public" ? "Public" : "Members only"],
         ],
+        repeatsWeekly: event.recurrence === "weekly",
+        repeatsMonthly: event.recurrence === "monthly",
         note: "Published schedule",
       })
     }
@@ -697,63 +669,6 @@ function CalendarIcon() {
   )
 }
 
-function WeekNav({
-  weekOffset,
-  weekStart,
-  onPositionChange,
-}: {
-  weekOffset: number
-
-  weekStart: Date
-
-  onPositionChange: (change: Partial<TimetablePosition>) => void
-}) {
-  const weekEnd = addDaysTo(weekStart, 6)
-
-  return (
-    <>
-      <div className="my-4 grid grid-cols-3 gap-1">
-        <Button
-          variant="ghost"
-          size="compact"
-          onClick={() => onPositionChange({ weekOffset: weekOffset - 1 })}
-          ariaLabel="Previous week"
-        >
-          ‹ Previous
-        </Button>
-        <Button
-          variant={weekOffset === 0 ? "secondary" : "ghost"}
-          size="compact"
-          onClick={() => onPositionChange({ weekOffset: 0 })}
-          className="whitespace-nowrap"
-        >
-          This Week
-        </Button>
-        <Button
-          variant="ghost"
-          size="compact"
-          onClick={() => onPositionChange({ weekOffset: weekOffset + 1 })}
-          ariaLabel="Next week"
-        >
-          Next ›
-        </Button>
-      </div>
-      <p className="mb-4 text-center text-[19px] font-extrabold text-[#1B3A6B]">
-        {weekStart.toLocaleDateString("en-US", {
-          month: "long",
-          day: "numeric",
-        })}{" "}
-        –{" "}
-        {weekEnd.toLocaleDateString("en-US", {
-          month: "long",
-          day: "numeric",
-          year: "numeric",
-        })}
-      </p>
-    </>
-  )
-}
-
 /** The whole timetable on its own full-screen page, where it can scroll. */
 
 function FullScheduleDialog({
@@ -938,7 +853,7 @@ export function AvailabilityTab({
     legend: [
       { label: "Available", color: "green" as const },
       { label: "Not available", color: "red" as const },
-      { label: "Serving", color: "navy" as const },
+      { label: "Serving & events", color: "navy" as const },
     ],
 
     view: position.view,

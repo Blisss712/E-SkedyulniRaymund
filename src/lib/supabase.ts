@@ -11,6 +11,23 @@ export const isSupabaseConfigured = Boolean(
     !supabaseUrl.includes("YOUR_PROJECT_REF"),
 )
 
+/**
+ * Reads the auth link type from the URL before createClient() consumes it.
+ *
+ * A password-recovery email returns with `type=recovery` in the fragment (the
+ * implicit flow) or the query. The auth event that says so can fire before React
+ * has subscribed, so the initial screen is decided from this value as well.
+ */
+function readInitialAuthLinkType(): string {
+  if (typeof window === "undefined") return ""
+  const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""))
+  const query = new URLSearchParams(window.location.search)
+  return fragment.get("type") || query.get("type") || ""
+}
+
+export const openedFromPasswordRecoveryLink =
+  readInitialAuthLinkType() === "recovery"
+
 // Fallback dummy URL and key to prevent createClient from crashing if unconfigured
 const clientUrl = isSupabaseConfigured
   ? supabaseUrl
