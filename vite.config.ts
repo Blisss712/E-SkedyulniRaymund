@@ -1,4 +1,9 @@
-import { defineConfig, type HtmlTagDescriptor, type Plugin } from "vite"
+import {
+  defineConfig,
+  loadEnv,
+  type HtmlTagDescriptor,
+  type Plugin,
+} from "vite"
 
 import react from "@vitejs/plugin-react"
 
@@ -8,12 +13,23 @@ import path from "node:path"
 
 import siteConfiguration from "./.figma/make/site.json"
 
+import {
+  assistantEnv,
+  assistantResponse,
+  type AssistantEnv,
+} from "./server/assistant"
+
 // Vite config — https://vitejs.dev/config/
 
 export default defineConfig(({ mode }) => {
   // .figma/make/deploy-preview passes `--mode development` for cached-preview builds.
 
   const emitSourcemaps = mode === "development"
+
+  // The Gemini key is server-only. Vite exposes it to this config file (and the
+  // dev middleware below), never to the browser bundle.
+  const env = loadEnv(mode, process.cwd(), "")
+  const assistant = assistantEnv(env)
 
   return {
     base: process.env.FIGMA_PUBLIC_URL
@@ -27,6 +43,8 @@ export default defineConfig(({ mode }) => {
     },
 
     plugins: [
+      assistantApiPlugin(assistant),
+
       react(),
 
       tailwindcss(),
@@ -54,7 +72,11 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
 
       watch: {
-        ignored: ["**/.figma/**"],
+        // `.figma/**` is platform state, and the `*.tmpdir` folders are
+        // short-lived files written next to a source file by the formatter.
+        // Watching them races with the writer and crashes the whole dev
+        // server on Windows with EBUSY, so they are left out.
+        ignored: ["**/.figma/**", "**/*.tmpdir/**", "**/*.tmp"],
       },
     },
 
@@ -564,4 +586,72 @@ function figmaMakeKitPlugin(options: {
       })
     },
   }
+}
+
+/**
+ * Serves the same `/api/assistant` endpoint as the Vercel function while the app
+ * runs under `vite dev`. The Gemini key is read from the local `.env` here and
+ * never reaches the browser.
+ */
+function assistantApiPlugin(env: AssistantEnv): Plugin {
+  return {
+    name: "assistant-api",
+
+    apply: "serve",
+
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        if ((req.url ?? "").split("?")[0] !== "/api/assistant") return next()
+
+        res.setHeader("Content-Type", "application/json")
+
+        if (req.method !== "POST") {
+          res.statusCode = 405
+          res.end(JSON.stringify({ error: "Method not allowed" }))
+          return
+        }
+
+        try {
+          const body = await readJsonBody(req)
+          const result = await assistantResponse(body, env)
+
+          res.statusCode = result.status
+          res.end(JSON.stringify(result.body))
+        } catch (error) {
+          console.error("Assistant API failed:", error)
+          res.statusCode = 500
+          res.end(JSON.stringify({ error: "Assistant request failed" }))
+        }
+      })
+    },
+  }
+}
+
+function readJsonBody(
+  req: import("node:http").IncomingMessage,
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let raw = ""
+
+    req.setEncoding("utf8")
+
+    req.on("data", (chunk: string) => {
+      raw += chunk
+
+      if (raw.length > 1_000_000) {
+        req.destroy()
+        reject(new Error("Assistant request body is too large"))
+      }
+    })
+
+    req.on("end", () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : null)
+      } catch {
+        resolve(null)
+      }
+    })
+
+    req.on("error", reject)
+  })
 }
