@@ -108,28 +108,66 @@ export function Logo({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
   )
 }
 
-export function BackButton({ onClick }: { onClick: () => void }) {
+/**
+ * The way back from a screen. One component for the whole app, so the control is
+ * always in the same place, says where it goes, and is big enough to tap.
+ */
+export function BackButton({
+  onClick,
+  label = "Go back",
+  tone = "light",
+  iconOnly = false,
+  className = "mb-5",
+}: {
+  onClick: () => void
+  /** Text beside the arrow. Keep it short; name the destination when helpful. */
+  label?: string
+  /** "light" for the page background, "dark" for the navy bars. */
+  tone?: "light" | "dark"
+  /** Shows only the arrow (with the label as its accessible name) in tight bars. */
+  iconOnly?: boolean
+  className?: string
+}) {
+  const tones = {
+    light:
+      "border-[#D1D9E8] bg-white text-[#1B3A6B] shadow-sm hover:border-[#9BA8C0] hover:bg-[#F8FAFC]",
+
+    dark:
+      "border-white/30 bg-white/10 text-white hover:border-white/60 hover:bg-white/20",
+  }
+
+  const ring =
+    tone === "dark"
+      ? "focus-visible:ring-white focus-visible:ring-offset-[#1B3A6B]"
+      : "focus-visible:ring-[#1B3A6B] focus-visible:ring-offset-[#F4F6FB]"
+
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="flex items-center gap-1 text-[#64748B] text-[15px] font-medium hover:text-[#1B3A6B] transition-colors mb-6 cursor-pointer"
+      aria-label={iconOnly ? label : undefined}
+      title={iconOnly ? label : undefined}
+      className={`inline-flex min-h-11 cursor-pointer items-center gap-1 rounded-full border-2 text-[15px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${tones[tone]} ${ring} ${
+        iconOnly ? "w-11 justify-center px-0" : "px-4"
+      } ${className}`}
     >
       <svg
-        width="18"
-        height="18"
-        viewBox="0 0 18 18"
+        width="20"
+        height="20"
+        viewBox="0 0 20 20"
         fill="none"
         aria-hidden="true"
+        className={iconOnly ? "" : "-ml-1"}
       >
         <path
-          d="M11 4L6 9l5 5"
+          d="M12.5 4.5 7 10l5.5 5.5"
           stroke="currentColor"
           strokeWidth="2"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
       </svg>
-      Go back
+      {!iconOnly && label}
     </button>
   )
 }

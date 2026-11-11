@@ -9,7 +9,7 @@ import type {
 
 import { DAYS_ORDER } from "./data"
 
-import { useSheetClose } from "../../shared/ui"
+import { BackButton, useSheetClose } from "../../shared/ui"
 
 import { slotTimeTo24h, type Slot } from "../../shared/slot"
 
@@ -1117,27 +1117,12 @@ export function SetRecurringScreen({
   return (
     <div className="min-h-screen bg-[#F4F6FB] flex flex-col">
       <div className="bg-[#1B3A6B] text-white px-4 pt-10 pb-5">
-        <button
+        <BackButton
           onClick={onBack}
-          className="flex items-center gap-1 text-white/70 text-[15px] font-medium mb-3 hover:text-white transition-colors cursor-pointer"
-        >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 18 18"
-            fill="none"
-            aria-hidden="true"
-          >
-            <path
-              d="M11 4L6 9l5 5"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          My Availability
-        </button>
+          label="My Availability"
+          tone="dark"
+          className="mb-3"
+        />
         <h1 className="text-[22px] font-bold">
           {initial ? "Edit Weekly Availability" : "Set Weekly Availability"}
         </h1>
@@ -1274,27 +1259,12 @@ export function AddOverrideScreen({
   return (
     <div className="min-h-screen bg-[#F4F6FB] flex flex-col">
       <div className="bg-[#1B3A6B] text-white px-4 pt-10 pb-5">
-        <button
+        <BackButton
           onClick={onBack}
-          className="flex items-center gap-1 text-white/70 text-[15px] font-medium mb-3 hover:text-white transition-colors cursor-pointer"
-        >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 18 18"
-            fill="none"
-            aria-hidden="true"
-          >
-            <path
-              d="M11 4L6 9l5 5"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          My Availability
-        </button>
+          label="My Availability"
+          tone="dark"
+          className="mb-3"
+        />
         <h1 className="text-[22px] font-bold">
           {initial ? "Edit One-Time Date" : "Add a One-Time Date"}
         </h1>

@@ -64,12 +64,13 @@ export function WelcomeScreen({ onStart, onSignIn, onAdmin, onCoordinator, accou
   )
 }
 
-export function TellNameScreen({ firstName, lastName, setFirstName, setLastName, onContinue }: {
+export function TellNameScreen({ firstName, lastName, setFirstName, setLastName, onContinue, onBack }: {
   firstName: string
   lastName: string
   setFirstName: (value: string) => void
   setLastName: (value: string) => void
   onContinue: () => void
+  onBack?: () => void
 }) {
   const [error, setError] = useState("")
 
@@ -84,6 +85,7 @@ export function TellNameScreen({ firstName, lastName, setFirstName, setLastName,
 
   return (
     <ScreenShell>
+      {onBack && <BackButton onClick={onBack} />}
       <div className="mb-8 flex justify-center"><Logo size="md" /></div>
       <Card>
         <p className="text-2xl font-bold text-[#1B3A6B]">Tell us your name</p>

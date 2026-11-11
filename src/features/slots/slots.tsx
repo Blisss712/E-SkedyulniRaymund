@@ -1,4 +1,5 @@
 import type { Slot, SlotStatus } from "../../shared/slot"
+import { BackButton } from "../../shared/ui"
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -203,28 +204,8 @@ export function SlotVolunteerScreen({
 
   return (
     <div className="min-h-screen bg-white flex flex-col px-5">
-      <div className="pt-12 pb-6">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-1 text-[#1B3A6B] text-[15px] font-medium hover:opacity-70 transition-opacity cursor-pointer"
-        >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 18 18"
-            fill="none"
-            aria-hidden="true"
-          >
-            <path
-              d="M11 4L6 9l5 5"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          Back
-        </button>
+      <div className="pt-10 pb-6">
+        <BackButton onClick={onBack} label="Back" className="" />
       </div>
       <div className="flex-1 flex flex-col gap-6">
         <div>
@@ -295,28 +276,8 @@ export function SlotServingScreen({
 }) {
   return (
     <div className="min-h-screen bg-white flex flex-col px-5">
-      <div className="pt-12 pb-6">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-1 text-[#1B3A6B] text-[15px] font-medium hover:opacity-70 transition-opacity cursor-pointer"
-        >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 18 18"
-            fill="none"
-            aria-hidden="true"
-          >
-            <path
-              d="M11 4L6 9l5 5"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          Back
-        </button>
+      <div className="pt-10 pb-6">
+        <BackButton onClick={onBack} label="Back" className="" />
       </div>
       <div className="flex-1 flex flex-col gap-6">
         <div>
@@ -404,55 +365,68 @@ export function SlotServingScreen({
   )
 }
 
-export function SlotFilledScreen({ onSeeOthers }: { onSeeOthers: () => void }) {
+export function SlotFilledScreen({
+  onSeeOthers,
+  onBack,
+}: {
+  onSeeOthers: () => void
+  onBack?: () => void
+}) {
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-center px-8 text-center gap-8">
-      <div className="w-20 h-20 rounded-full bg-[#F1F5F9] flex items-center justify-center">
-        <svg
-          width="36"
-          height="36"
-          viewBox="0 0 36 36"
-          fill="none"
-          aria-hidden="true"
-        >
-          <circle
-            cx="18"
-            cy="18"
-            r="15"
-            stroke="#94A3B8"
-            strokeWidth="2"
+    <div className="min-h-screen bg-white flex flex-col px-5">
+      {onBack && (
+        <div className="pt-10">
+          <BackButton onClick={onBack} label="Back" className="" />
+        </div>
+      )}
+      <div className="flex-1 flex flex-col items-center justify-center gap-8 px-3 text-center">
+        <div className="w-20 h-20 rounded-full bg-[#F1F5F9] flex items-center justify-center">
+          <svg
+            width="36"
+            height="36"
+            viewBox="0 0 36 36"
             fill="none"
-          />
-          <path
-            d="M12 18h12"
-            stroke="#94A3B8"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-          <path
-            d="M18 9v4M18 23v4"
-            stroke="#94A3B8"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        </svg>
-      </div>
-      <div>
-        <h1 className="text-[24px] font-extrabold text-[#1A202C] leading-tight mb-3">
-          Sorry, this slot just filled up.
-        </h1>
-        <p className="text-[#64748B] text-[16px] leading-relaxed">
-          Someone else took the last spot just before you. Try another open slot
-          below.
-        </p>
-      </div>
-      <div className="w-full">
-        <button
-          onClick={onSeeOthers}
-          className="w-full min-h-[56px] rounded-full bg-[#1B3A6B] text-white text-[17px] font-bold hover:bg-[#142d54] active:scale-[0.98] transition-all cursor-pointer"
-        >
-          See other open slots
-        </button>
+            aria-hidden="true"
+          >
+            <circle
+              cx="18"
+              cy="18"
+              r="15"
+              stroke="#94A3B8"
+              strokeWidth="2"
+              fill="none"
+            />
+            <path
+              d="M12 18h12"
+              stroke="#94A3B8"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+            <path
+              d="M18 9v4M18 23v4"
+              stroke="#94A3B8"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        </div>
+        <div>
+          <h1 className="text-[24px] font-extrabold text-[#1A202C] leading-tight mb-3">
+            Sorry, this slot just filled up.
+          </h1>
+          <p className="text-[#64748B] text-[16px] leading-relaxed">
+            Someone else took the last spot just before you. Try another open slot
+            below.
+          </p>
+        </div>
+        <div className="w-full">
+          <button
+            onClick={onSeeOthers}
+            className="w-full min-h-[56px] rounded-full bg-[#1B3A6B] text-white text-[17px] font-bold hover:bg-[#142d54] active:scale-[0.98] transition-all cursor-pointer"
+          >
+            See other open slots
+          </button>
+        </div>
       </div>
     </div>
   )
