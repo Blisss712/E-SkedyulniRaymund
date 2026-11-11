@@ -285,7 +285,7 @@ export function SlotServingScreen({
             Your slot
           </h1>
           <p className="text-[#64748B] text-[16px]">
-            You've already volunteered for this one.
+            You are serving at {slot.time} {slot.massName}.
           </p>
         </div>
         <div className="border border-[#D1D9E8] rounded-2xl p-5 bg-white">

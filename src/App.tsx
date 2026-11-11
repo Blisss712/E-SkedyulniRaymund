@@ -694,8 +694,20 @@ export default function App() {
           slot={slots.activeSlot}
           error={slots.error}
           onCancelSpot={() => {
+            const activeSlot = slots.activeSlot
+            if (!activeSlot) return
+            if (
+              !window.confirm(
+                `Cancel your spot for ${activeSlot.time} ${activeSlot.massName}?`,
+              )
+            ) {
+              return
+            }
             void slots.cancelSpot().then(result => {
-              if (result.ok) go(dashboardReturnScreen)
+              if (result.ok) {
+                window.alert("Your spot has been cancelled.")
+                go(dashboardReturnScreen)
+              }
             })
           }}
           onBack={() => go(dashboardReturnScreen)}
