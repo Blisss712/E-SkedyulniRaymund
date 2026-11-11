@@ -183,7 +183,9 @@ CREATE TABLE IF NOT EXISTS public.organization_join_requests (
     status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
     requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     reviewed_at TIMESTAMPTZ NULL,
-    reviewed_by UUID NULL REFERENCES public.admin_profiles(user_id) ON DELETE SET NULL,
+    -- The reviewer is an administrator or the coordinator of this ministry;
+    -- both are auth users. See supabase/coordinator_join_approvals.sql.
+    reviewed_by UUID NULL REFERENCES auth.users(id) ON DELETE SET NULL,
     reviewer_note TEXT NOT NULL DEFAULT ''
 );
 
@@ -386,8 +388,15 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.get_admin_email(TEXT) TO anon, authenticated;
 
--- Transactional function to approve a join request and create membership
-CREATE OR REPLACE FUNCTION public.approve_join_request(req_id VARCHAR, reviewer_id UUID, note TEXT DEFAULT '')
+-- Transactional function to review a join request (approve or reject) and, when
+-- approved, create the membership row. The caller must be an administrator or
+-- the coordinator of the request's own ministry.
+CREATE OR REPLACE FUNCTION public.review_join_request(
+    req_id VARCHAR,
+    decision VARCHAR,
+    reviewer_id UUID DEFAULT NULL,
+    note TEXT DEFAULT ''
+)
 RETURNS VOID
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -395,35 +404,97 @@ SET search_path = public
 AS $$
 DECLARE
     v_req RECORD;
+    v_reviewer UUID;
 BEGIN
-    -- Approval is an administrator action. The function is SECURITY DEFINER, so
-    -- without this check any caller who knew a request id could approve it.
-    IF NOT public.is_admin(auth.uid()) THEN
-        RAISE EXCEPTION 'Only administrators can approve join requests';
+    IF decision IS NULL OR decision NOT IN ('approved', 'rejected') THEN
+        RAISE EXCEPTION 'The decision must be approved or rejected';
     END IF;
 
-    SELECT * INTO v_req FROM public.organization_join_requests WHERE id = req_id;
+    v_reviewer := auth.uid();
+    IF v_reviewer IS NULL THEN
+        v_reviewer := reviewer_id;
+    ELSIF reviewer_id IS NOT NULL AND reviewer_id <> v_reviewer THEN
+        RAISE EXCEPTION 'reviewer_id must match the signed-in user';
+    END IF;
+
+    IF v_reviewer IS NULL THEN
+        RAISE EXCEPTION 'Sign in before reviewing a join request';
+    END IF;
+
+    SELECT * INTO v_req
+    FROM public.organization_join_requests
+    WHERE id = req_id;
+
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Join request not found';
     END IF;
 
+    IF NOT (
+        public.is_admin(v_reviewer)
+        OR public.is_organization_leader(v_req.organization_id, v_reviewer)
+    ) THEN
+        RAISE EXCEPTION
+            'Only an administrator or a coordinator of this ministry can review join requests';
+    END IF;
+
+    IF v_req.status <> 'pending' AND v_req.status <> decision THEN
+        RAISE EXCEPTION 'This join request has already been reviewed';
+    END IF;
+
+    IF decision = 'approved' THEN
+        IF v_req.member_user_id IS NULL THEN
+            RAISE EXCEPTION 'This request is not linked to a member account';
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1
+            FROM public.member_profiles
+            WHERE user_id = v_req.member_user_id
+              AND active = TRUE
+        ) THEN
+            RAISE EXCEPTION 'This member account is no longer active';
+        END IF;
+    END IF;
+
     UPDATE public.organization_join_requests
-    SET status = 'approved',
+    SET status = decision,
         reviewed_at = NOW(),
-        reviewed_by = reviewer_id,
-        reviewer_note = note
+        reviewed_by = v_reviewer,
+        reviewer_note = COALESCE(note, '')
     WHERE id = req_id;
 
-    IF v_req.member_user_id IS NOT NULL THEN
-        INSERT INTO public.organization_member_accounts (organization_id, user_id)
-        VALUES (v_req.organization_id, v_req.member_user_id)
-        ON CONFLICT DO NOTHING;
+    IF decision = 'approved' THEN
+        INSERT INTO public.organization_member_accounts (organization_id, user_id, joined_at)
+        VALUES (v_req.organization_id, v_req.member_user_id, NOW())
+        ON CONFLICT (organization_id, user_id) DO NOTHING;
     END IF;
 END;
 $$;
 
+-- Older app builds call approve_join_request(); keep the name working for both
+-- roles while the review function owns the rules.
+CREATE OR REPLACE FUNCTION public.approve_join_request(
+    req_id VARCHAR,
+    reviewer_id UUID,
+    note TEXT DEFAULT ''
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    PERFORM public.review_join_request(req_id, 'approved', reviewer_id, note);
+END;
+$$;
+
 -- Functions are executable by PUBLIC by default, which would include the anon
--- role. Only signed-in administrators (and the service role) may call this.
+-- role. Only signed-in administrators and coordinators (and the service role)
+-- may call these.
+REVOKE ALL ON FUNCTION public.review_join_request(VARCHAR, VARCHAR, UUID, TEXT)
+    FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.review_join_request(VARCHAR, VARCHAR, UUID, TEXT)
+    TO authenticated, service_role;
+
 REVOKE ALL ON FUNCTION public.approve_join_request(VARCHAR, UUID, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.approve_join_request(VARCHAR, UUID, TEXT)
     TO authenticated, service_role;
@@ -612,6 +683,14 @@ CREATE POLICY "Admins full manage join requests" ON public.organization_join_req
 FOR ALL TO authenticated
 USING (public.is_admin(auth.uid()))
 WITH CHECK (public.is_admin(auth.uid()));
+
+-- A coordinator reviews the requests of the ministries they lead. Decisions are
+-- written through review_join_request(), so no direct UPDATE policy is granted:
+-- the coordinator cannot rewrite the applicant or the organization.
+DROP POLICY IF EXISTS "Coordinators read ministry join requests" ON public.organization_join_requests;
+CREATE POLICY "Coordinators read ministry join requests" ON public.organization_join_requests
+FOR SELECT TO authenticated
+USING (public.is_organization_leader(organization_id, auth.uid()));
 
 -- Memberships
 DROP POLICY IF EXISTS "Members read own memberships" ON public.organization_member_accounts;

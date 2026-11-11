@@ -121,13 +121,14 @@ export default function App() {
     void refreshProfileRef.current()
   }, [screen])
 
-  // The review queue is shared with members, so re-read it on every visit.
+  // The review queue is shared with members, so re-read it on every visit. A
+  // coordinator sees only their ministries' requests (enforced by RLS and the
+  // scoped query), and reviews them in the same grouped queue.
   const refreshJoinRequestsRef = useRef(joinRequests.refresh)
   refreshJoinRequestsRef.current = joinRequests.refresh
   useEffect(() => {
     if (!adminAuthenticated || screen !== "admin") return
-    // Coordinators do not review join requests; that stays administrator-only.
-    if (profile?.role !== "admin") return
+    if (profile?.role !== "admin" && profile?.role !== "leader") return
     void refreshJoinRequestsRef.current()
   }, [adminAuthenticated, screen, profile?.role])
 

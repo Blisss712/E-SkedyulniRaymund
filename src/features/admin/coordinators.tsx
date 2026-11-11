@@ -1,8 +1,15 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button, InputField } from "../../shared/ui"
 import { useAuth } from "../auth/AuthContext"
 import { isSupabaseConfigured } from "../../lib/supabase"
 import type { Organization } from "./types"
+import {
+  MemberAvatar,
+  MinistryStatusPill,
+  OrganizationFilter,
+  OrganizationGroupCard,
+  groupItemsByOrganization,
+} from "./orgGroups"
 import {
   appointOrganizationLeader,
   fetchLeaderAppointments,
@@ -36,8 +43,8 @@ function SectionHeader() {
       <p className="mt-2 text-2xl font-extrabold tracking-tight text-navy sm:text-3xl">Coordinators</p>
       <p className="mt-2 max-w-2xl text-base leading-relaxed text-muted">
         Appoint a member to coordinate one of their ministries. Coordinators can create and organise
-        events for that ministry from their own Coordinator Workspace, without gaining administrator
-        access.
+        events and review join requests for that ministry from their own Coordinator Workspace,
+        without gaining administrator access.
       </p>
     </div>
   )
@@ -66,6 +73,12 @@ export function CoordinatorsSection({ organizations }: { organizations: Organiza
   const [appointmentError, setAppointmentError] = useState("")
   const [notice, setNotice] = useState("")
   const [busyKey, setBusyKey] = useState("")
+
+  const [appointmentFilter, setAppointmentFilter] = useState("all")
+  const [appointmentQuery, setAppointmentQuery] = useState("")
+  /** Ministry picked from a group header before a member account is chosen. */
+  const [preferredOrganizationId, setPreferredOrganizationId] = useState("")
+  const searchPanelRef = useRef<HTMLElement>(null)
 
   const busy = Boolean(busyKey)
 
@@ -169,7 +182,18 @@ export function CoordinatorsSection({ organizations }: { organizations: Organiza
         .filter(appointment => appointment.userId === account.userId)
         .map(appointment => appointment.organizationId),
     )
-    const firstAvailable = organizations.find(
+    // When the administrator started from a ministry group, default to that
+    // ministry instead of guessing the member's first one.
+    const preferred = organizations.find(
+      organization =>
+        organization.id === preferredOrganizationId &&
+        account.organizationIds.includes(organization.id) &&
+        !alreadyLed.has(organization.id),
+    )
+    // The picked ministry cannot be used for this account (not a member, or
+    // already coordinated there), so stop calling the appointment "for" it.
+    if (preferredOrganizationId && !preferred) setPreferredOrganizationId("")
+    const firstAvailable = preferred ?? organizations.find(
       organization =>
         account.organizationIds.includes(organization.id) && !alreadyLed.has(organization.id),
     )
@@ -177,6 +201,16 @@ export function CoordinatorsSection({ organizations }: { organizations: Organiza
     setTargetOrganizationId(firstAvailable?.id ?? "")
     setNotice("")
     setAppointmentError("")
+  }
+
+  /** Starts an appointment for one ministry from its group header. */
+  function appointFor(organizationId: string) {
+    setSelected(null)
+    setPreferredOrganizationId(organizationId)
+    setTargetOrganizationId(organizationId)
+    setNotice("")
+    setAppointmentError("")
+    searchPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
   }
 
   async function appoint() {
@@ -193,6 +227,7 @@ export function CoordinatorsSection({ organizations }: { organizations: Organiza
       })
       await loadAppointments()
       const ministry = organizations.find(organization => organization.id === targetOrganizationId)
+      setPreferredOrganizationId("")
       setNotice(
         `${selected.fullName} can now organise events for ${ministry?.name || "that ministry"}.`,
       )
@@ -247,10 +282,50 @@ export function CoordinatorsSection({ organizations }: { organizations: Organiza
     }
   }
 
-  const sortedAppointments = [...appointments].sort(
-    (a, b) =>
-      a.organizationName.localeCompare(b.organizationName) ||
-      a.memberName.localeCompare(b.memberName),
+  // Coordinators are read one ministry at a time: the group header answers
+  // "who coordinates this ministry?" before any individual name is read.
+  const appointmentGroups = groupItemsByOrganization(
+    organizations,
+    appointments,
+    appointment => ({
+      organization: organizations.find(
+        organization => organization.id === appointment.organizationId,
+      ),
+      fallbackName: appointment.organizationName || "Unassigned ministry",
+    }),
+  )
+
+  const sortedAppointmentGroups = [...appointmentGroups]
+    .map(group => ({
+      ...group,
+      items: [...group.items].sort((a, b) => a.memberName.localeCompare(b.memberName)),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  const appointmentFilterOptions = [
+    { value: "all", label: "All ministries", count: appointments.length },
+    ...sortedAppointmentGroups.map(group => ({
+      value: group.key,
+      label: group.name,
+      count: group.items.length,
+    })),
+  ]
+
+  const appointmentQueryText = appointmentQuery.trim().toLowerCase()
+  const visibleAppointmentGroups = sortedAppointmentGroups
+    .filter(group => appointmentFilter === "all" || group.key === appointmentFilter)
+    .map(group => ({
+      ...group,
+      items: group.items.filter(appointment =>
+        !appointmentQueryText ||
+        appointment.memberName.toLowerCase().includes(appointmentQueryText) ||
+        appointment.memberEmail.toLowerCase().includes(appointmentQueryText),
+      ),
+    }))
+    .filter(group => group.items.length > 0)
+
+  const preferredOrganization = organizations.find(
+    organization => organization.id === preferredOrganizationId,
   )
 
   return (
@@ -269,12 +344,17 @@ export function CoordinatorsSection({ organizations }: { organizations: Organiza
       )}
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <section className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+        <section ref={searchPanelRef} className="rounded-2xl border border-border bg-white p-5 shadow-sm">
           <p className="text-lg font-bold text-text">Find a member account</p>
           <p className="mt-1 text-sm leading-relaxed text-muted">
             Search by name or email. Only members who already belong to a ministry can be appointed
             for it.
           </p>
+          {preferredOrganization && (
+            <p className="mt-3 rounded-xl bg-navy-soft px-3 py-2 text-sm font-semibold text-navy">
+              Appointing for {preferredOrganization.name}. Choose a member below.
+            </p>
+          )}
           <div className="mt-4">
             <InputField
               id="coordinator-search"
@@ -351,7 +431,9 @@ export function CoordinatorsSection({ organizations }: { organizations: Organiza
           <p className="text-lg font-bold text-text">Appointment</p>
           {!selected ? (
             <p className="mt-4 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm leading-relaxed text-muted">
-              Choose a member account on the left, then pick the ministry they should coordinate.
+              {preferredOrganization
+                ? `Choose a member account on the left, then confirm their appointment for ${preferredOrganization.name}.`
+                : "Choose a member account on the left, then pick the ministry they should coordinate."}
             </p>
           ) : (
             <div className="mt-4 space-y-4">
@@ -441,9 +523,10 @@ export function CoordinatorsSection({ organizations }: { organizations: Organiza
       <section className="rounded-2xl border border-border bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-lg font-bold text-text">Appointed coordinators</p>
+            <p className="text-lg font-bold text-text">Coordinators by ministry</p>
             <p className="mt-1 text-sm text-muted">
-              Coordinators can add and organise events only for the ministry shown here.
+              Each coordinator is listed under the ministry they coordinate. Their appointment
+              covers that ministry's events and join requests.
             </p>
           </div>
           <span className="text-sm font-bold text-muted">{appointments.length} total</span>
@@ -453,49 +536,101 @@ export function CoordinatorsSection({ organizations }: { organizations: Organiza
           <p className="mt-4 rounded-xl bg-bg px-4 py-6 text-center text-sm text-muted">
             Loading appointments…
           </p>
-        ) : sortedAppointments.length === 0 ? (
+        ) : appointments.length === 0 ? (
           <p className="mt-4 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm leading-relaxed text-muted">
             No coordinators yet. Search for a member above to appoint the first one.
           </p>
         ) : (
-          <div className="mt-4 divide-y divide-border">
-            {sortedAppointments.map(appointment => {
-              const key = `revoke:${appointment.organizationId}:${appointment.userId}`
-              return (
-                <div
-                  key={`${appointment.organizationId}:${appointment.userId}`}
-                  className="flex flex-col justify-between gap-3 py-4 sm:flex-row sm:items-center"
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-bold text-text">{appointment.memberName}</p>
-                      <span className="rounded-full bg-navy-soft px-3 py-1 text-xs font-bold text-navy">
-                        Coordinator
-                      </span>
-                    </div>
-                    <p className="mt-0.5 truncate text-sm text-muted">
-                      {appointment.memberEmail || "No email on file"}
-                    </p>
-                    <p className="mt-1 text-sm font-semibold text-navy">
-                      {appointment.organizationName}
-                      <span className="ml-2 font-normal text-muted">
-                        appointed {formatAppointed(appointment.appointedAt)}
-                      </span>
-                    </p>
-                  </div>
-                  <Button
-                    variant="danger"
-                    size="compact"
-                    fullWidth={false}
-                    disabled={busy}
-                    onClick={() => void revoke(appointment)}
-                    className="shrink-0"
-                  >
-                    {busyKey === key ? "Removing…" : "Remove access"}
-                  </Button>
-                </div>
-              )
-            })}
+          <div className="mt-4 space-y-3">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <InputField
+                id="coordinator-filter"
+                label="Find a coordinator"
+                value={appointmentQuery}
+                onChange={setAppointmentQuery}
+                placeholder="Search by name or email"
+              />
+              <OrganizationFilter
+                id="coordinator-organization"
+                label="Ministry"
+                value={appointmentFilter}
+                onChange={setAppointmentFilter}
+                options={appointmentFilterOptions}
+              />
+            </div>
+            {visibleAppointmentGroups.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm leading-relaxed text-muted">
+                No coordinator matches this search in the selected ministry.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {visibleAppointmentGroups.map(group => {
+                  const organization = group.organization
+                  return (
+                    <OrganizationGroupCard
+                      key={group.key}
+                      name={group.name}
+                      badges={organization ? <MinistryStatusPill status={organization.status} /> : undefined}
+                      subtitle={[
+                        organization?.category,
+                        `${group.items.length} ${group.items.length === 1 ? "coordinator" : "coordinators"}`,
+                      ].filter(Boolean).join(" · ")}
+                      action={organization ? (
+                        <Button
+                          variant="ghost"
+                          size="compact"
+                          fullWidth={false}
+                          onClick={() => appointFor(organization.id)}
+                          className="whitespace-nowrap"
+                        >
+                          + Appoint
+                        </Button>
+                      ) : undefined}
+                    >
+                      <div className="divide-y divide-border">
+                        {group.items.map(appointment => {
+                          const key = `revoke:${appointment.organizationId}:${appointment.userId}`
+                          return (
+                            <div
+                              key={`${appointment.organizationId}:${appointment.userId}`}
+                              className="flex flex-col justify-between gap-3 px-4 py-4 sm:flex-row sm:items-center sm:px-5"
+                            >
+                              <div className="flex min-w-0 items-start gap-3">
+                                <MemberAvatar name={appointment.memberName} />
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="font-bold text-text">{appointment.memberName}</p>
+                                    <span className="rounded-full bg-navy-soft px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-navy">
+                                      Coordinator
+                                    </span>
+                                  </div>
+                                  <p className="mt-0.5 truncate text-sm text-muted">
+                                    {appointment.memberEmail || "No email on file"}
+                                  </p>
+                                  <p className="mt-1 text-xs text-muted">
+                                    Appointed {formatAppointed(appointment.appointedAt)}
+                                  </p>
+                                </div>
+                              </div>
+                              <Button
+                                variant="danger"
+                                size="compact"
+                                fullWidth={false}
+                                disabled={busy}
+                                onClick={() => void revoke(appointment)}
+                                className="shrink-0"
+                              >
+                                {busyKey === key ? "Removing…" : "Remove access"}
+                              </Button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </OrganizationGroupCard>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )}
       </section>

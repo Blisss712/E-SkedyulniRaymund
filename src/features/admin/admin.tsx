@@ -7,6 +7,15 @@ import { MessagesPanel } from "../messaging/messaging"
 import { useMessaging } from "../messaging/MessagingContext"
 import type { ChatConversation } from "../messaging/types"
 import {
+  MemberAvatar,
+  MinistryStatusPill,
+  OrganizationAvatar,
+  OrganizationFilter,
+  OrganizationGroupCard,
+  groupItemsByOrganization,
+  resolveRequestOrganization,
+} from "./orgGroups"
+import {
   combineDateTime,
   describeSchedule,
   eventSchedule,
@@ -38,13 +47,15 @@ const ADMIN_SECTIONS: AdminSectionItem[] = [
   { value: "messages", label: "Messages", short: "Chat" },
 ]
 /**
- * A coordinator sees only their own ministries: no organization management, no
- * join-request review, and no Coordinator appointments of their own.
+ * A coordinator sees only their own ministries: no organization management and
+ * no Coordinator appointments of their own, but they do review the join requests
+ * of the ministries they lead.
  */
 const COORDINATOR_SECTIONS: AdminSectionItem[] = [
   { value: "dashboard", label: "Dashboard", short: "Home" },
   { value: "organizations", label: "My ministries", short: "Ministries" },
   { value: "events", label: "Events", short: "Events" },
+  { value: "requests", label: "Join requests", short: "Requests" },
   { value: "messages", label: "Messages", short: "Chat" },
 ]
 
@@ -182,17 +193,39 @@ function EmptyState({ title, detail, action }: { title: string; detail: string; 
   )
 }
 
-function Dashboard({ admin, onEvents, onTimeline, scoped }: {
+function Dashboard({ admin, requests, onEvents, onTimeline, onOpenOrganization, scoped }: {
   admin: ReturnType<typeof useAdmin>
+  /** Pending join requests, so the dashboard points at the ministry that needs review. */
+  requests: JoinRequest[]
   onEvents: () => void
   /** Opens the Events section on its timeline view. */
   onTimeline: () => void
+  /** Opens one ministry's details from the at-a-glance list. */
+  onOpenOrganization: (id: string) => void
   scoped: boolean
 }) {
+  const now = new Date()
   const nextEvents = admin.events
-    .filter(event => event.status === "published")
+    .filter(event => event.status === "published" && new Date(event.startsAt) > now)
     .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
     .slice(0, 4)
+
+  // Both roles review membership for the ministries they can see; a coordinator's
+  // request list is already scoped to the ministries they lead.
+  const pendingByOrganization = new Map<string, number>()
+  for (const request of requests) {
+    if (request.status !== "pending") continue
+    const organization = resolveRequestOrganization(request, admin.organizations)
+    const key = organization?.id ?? `name:${request.groupName.trim().toLowerCase()}`
+    pendingByOrganization.set(key, (pendingByOrganization.get(key) ?? 0) + 1)
+  }
+
+  // Ministries with something waiting on a decision come first: that is the
+  // list an administrator is most likely to act on.
+  const summaryOrganizations = [...admin.organizations].sort((a, b) =>
+    (pendingByOrganization.get(b.id) ?? 0) - (pendingByOrganization.get(a.id) ?? 0) ||
+    a.name.localeCompare(b.name),
+  )
 
   return (
     <div className="space-y-7">
@@ -213,115 +246,412 @@ function Dashboard({ admin, onEvents, onTimeline, scoped }: {
         <MetricCard label="Upcoming" value={admin.metrics.upcomingEvents} detail="Scheduled ahead" />
         <MetricCard label="Drafts" value={admin.metrics.draftEvents} detail="Waiting for review" />
       </div>
-      <div className="rounded-2xl border border-border bg-white p-5 shadow-sm">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xl font-bold text-text">Upcoming events</p>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-xl font-bold text-text">Upcoming events</p>
+              <p className="mt-1 text-sm text-muted">
+                {scoped
+                  ? "The next published activities in your ministries."
+                  : "The next published activities across organizations."}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button variant="ghost" size="compact" fullWidth={false} onClick={onTimeline} className="whitespace-nowrap">Timeline</Button>
+              <Button variant="ghost" size="compact" fullWidth={false} onClick={onEvents} className="whitespace-nowrap">View all</Button>
+            </div>
+          </div>
+          {nextEvents.length ? (
+            <div className="divide-y divide-border">
+              {nextEvents.map(event => {
+                const organization = admin.organizations.find(item => item.id === event.organizationId)
+                return (
+                  <div key={event.id} className="flex items-center justify-between gap-4 py-4">
+                    <div className="min-w-0">
+                      <p className="truncate font-bold text-text">{event.title}</p>
+                      <p className="mt-1 text-sm text-muted">{organization?.name} · {formatEventWhen(event)}</p>
+                    </div>
+                    <StatusBadge status={event.status} />
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted">
+              No upcoming published events. Create one from Events when the next activity is ready.
+            </p>
+          )}
+        </div>
+        <div className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+          <div className="mb-2">
+            <p className="text-xl font-bold text-text">
+              {scoped ? "My ministries at a glance" : "Ministries at a glance"}
+            </p>
             <p className="mt-1 text-sm text-muted">
               {scoped
-                ? "The next published activities in your ministries."
-                : "The next published activities across organizations."}
+                ? "Pending join requests and event counts for the ministries you coordinate."
+                : "Pending join requests and event counts, grouped by ministry."}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button variant="ghost" size="compact" fullWidth={false} onClick={onTimeline} className="whitespace-nowrap">Timeline</Button>
-            <Button variant="ghost" size="compact" fullWidth={false} onClick={onEvents} className="whitespace-nowrap">View all</Button>
-          </div>
-        </div>
-        <div className="divide-y divide-border">
-          {nextEvents.map(event => {
-            const organization = admin.organizations.find(item => item.id === event.organizationId)
-            return (
-              <div key={event.id} className="flex items-center justify-between gap-4 py-4">
-                <div className="min-w-0">
-                  <p className="truncate font-bold text-text">{event.title}</p>
-                  <p className="mt-1 text-sm text-muted">{organization?.name} · {formatEventWhen(event)}</p>
-                </div>
-                <StatusBadge status={event.status} />
-              </div>
-            )
-          })}
+          {summaryOrganizations.length ? (
+            <div className="divide-y divide-border">
+              {summaryOrganizations.map(organization => {
+                const pending = pendingByOrganization.get(organization.id) ?? 0
+                const eventCount = admin.events.filter(
+                  event => event.organizationId === organization.id,
+                ).length
+                return (
+                  <button
+                    key={organization.id}
+                    type="button"
+                    onClick={() => onOpenOrganization(organization.id)}
+                    className="flex w-full items-center gap-3 py-3 text-left transition-colors hover:bg-bg"
+                  >
+                    <OrganizationAvatar name={organization.name} size="sm" />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="truncate font-bold text-text">{organization.name}</span>
+                        <MinistryStatusPill status={organization.status} />
+                      </span>
+                      <span className="mt-0.5 block text-xs text-muted">
+                        {organization.category} · {eventCount} {eventCount === 1 ? "event" : "events"}
+                      </span>
+                    </span>
+                    {pending > 0 && (
+                      <span className="shrink-0 rounded-full bg-gold-light px-2.5 py-1 text-[11px] font-bold text-gold">
+                        {pending} pending
+                      </span>
+                    )}
+                    <span className="shrink-0 text-sm font-bold text-navy">Open</span>
+                  </button>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm leading-relaxed text-muted">
+              {scoped
+                ? "An administrator appoints you as coordinator of a ministry you belong to. Once appointed, it appears here."
+                : "Create an organization to start grouping events and membership requests by ministry."}
+            </p>
+          )}
         </div>
       </div>
     </div>
   )
 }
 
-function JoinRequestList({ requests, onApprove, onReject }: {
+function JoinRequestList({ requests, organizations, scoped, onApprove, onReject }: {
   requests: JoinRequest[]
+  organizations: Organization[]
+  /** True in a coordinator's workspace: only their ministries are reviewed. */
+  scoped: boolean
   onApprove: (id: string) => void
   onReject: (id: string) => void
 }) {
   const [filter, setFilter] = useState<JoinRequestStatus | "all">("pending")
-  const filteredRequests = requests.filter(request => filter === "all" || request.status === filter)
+  const [organizationFilter, setOrganizationFilter] = useState("all")
+  const [query, setQuery] = useState("")
+
+  const queryText = query.trim().toLowerCase()
+
+  // The organization is the grouping unit: a reviewer reads "St. Joseph Parish
+  // - 3 pending" before reading a single member name.
+  const groups = useMemo(
+    () => groupItemsByOrganization(organizations, requests, request => ({
+      organization: resolveRequestOrganization(request, organizations),
+      fallbackName: request.groupName || "Unassigned ministry",
+    })),
+    [organizations, requests],
+  )
+
+  const pendingByGroup = useMemo(() => new Map(
+    groups.map(group => [
+      group.key,
+      group.items.filter(request => request.status === "pending").length,
+    ]),
+  ), [groups])
+
+  const statusCounts = useMemo(() => ({
+    all: requests.length,
+    pending: requests.filter(request => request.status === "pending").length,
+    approved: requests.filter(request => request.status === "approved").length,
+    rejected: requests.filter(request => request.status === "rejected").length,
+  }), [requests])
+
+  const organizationOptions = [
+    { value: "all", label: "All ministries", count: requests.length },
+    ...groups
+      .slice()
+      .sort((a, b) =>
+        (pendingByGroup.get(b.key) ?? 0) - (pendingByGroup.get(a.key) ?? 0) ||
+        a.name.localeCompare(b.name),
+      )
+      .map(group => ({ value: group.key, label: group.name, count: group.items.length })),
+  ]
+
+  const statusRank: Record<JoinRequestStatus, number> = { pending: 0, approved: 1, rejected: 2 }
+
+  const visibleGroups = groups
+    .filter(group => organizationFilter === "all" || group.key === organizationFilter)
+    .map(group => ({
+      ...group,
+      items: group.items
+        .filter(request => filter === "all" || request.status === filter)
+        .filter(request => !queryText || request.memberName.toLowerCase().includes(queryText))
+        .sort((a, b) =>
+          statusRank[a.status] - statusRank[b.status] ||
+          b.requestedAt.localeCompare(a.requestedAt),
+        ),
+    }))
+    .filter(group => group.items.length > 0)
+    .sort((a, b) =>
+      (pendingByGroup.get(b.key) ?? 0) - (pendingByGroup.get(a.key) ?? 0) ||
+      a.name.localeCompare(b.name),
+    )
+
+  const visibleCount = visibleGroups.reduce((total, group) => total + group.items.length, 0)
+  const pendingGroups = groups
+    .filter(group => (pendingByGroup.get(group.key) ?? 0) > 0)
+    .sort((a, b) => (pendingByGroup.get(b.key) ?? 0) - (pendingByGroup.get(a.key) ?? 0))
+
+  /** Approves every pending request of one ministry after one confirmation. */
+  function approveAll(organizationName: string, ids: string[]) {
+    if (!ids.length) return
+    if (!window.confirm(
+      `Approve all ${ids.length} pending requests for ${organizationName}? Each member will join that ministry.`,
+    )) return
+    ids.forEach(id => onApprove(id))
+  }
 
   return (
     <div className="space-y-6">
       <AdminHeader
+        eyebrow={scoped ? "Coordination" : "Administration"}
         title="Member join requests"
-        description="Review requests sent with an organization join code, or without a code by choosing a ministry."
+        description={scoped
+          ? "Members asking to join the ministries you coordinate, grouped by ministry so you can decide one organization at a time."
+          : "Every member is grouped under the ministry they asked to join, so you can review one organization at a time instead of matching names by hand."}
       />
-      <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
-        <p className="mb-2 text-sm font-semibold text-text">Filter requests</p>
-        <div className="flex flex-wrap rounded-xl bg-bg p-1">
-          {(["pending", "approved", "rejected", "all"] as const).map(value => (
-            <Button
-              key={value}
-              variant={filter === value ? "tabActive" : "tabInactive"}
-              size="compact"
-              fullWidth={false}
-              onClick={() => setFilter(value)}
-              className="capitalize"
-            >
-              {value}
-            </Button>
-          ))}
-        </div>
-      </div>
-      {!filteredRequests.length ? (
-        <EmptyState
-          title={requests.length ? "No matching requests" : "No join requests"}
-          detail={requests.length ? "There are no requests in this status." : "New membership requests will appear here for review."}
-        />
-      ) : (
-        <section className="space-y-3">
-          <div>
-            <p className="text-xl font-bold text-text">{filter === "all" ? "All requests" : `${filter[0].toUpperCase()}${filter.slice(1)} requests`}</p>
-            <p className="mt-1 text-sm text-muted">
-              {filter === "pending" ? "Approve or reject requests waiting for an administrator decision." : "Review the status of submitted membership requests."}
+      {statusCounts.pending > 0 && (
+        <section className="rounded-2xl border border-gold/40 bg-gold-light p-4 sm:p-5">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <p className="font-bold text-gold">
+              {statusCounts.pending} {statusCounts.pending === 1 ? "request is" : "requests are"} waiting for review
+            </p>
+            <p className="text-sm font-medium text-gold">
+              Pick a ministry to see only its members.
             </p>
           </div>
-          {filteredRequests.map(request => (
-              <div key={request.id} className="rounded-2xl border border-gold/30 bg-white p-5 shadow-sm">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <p className="text-lg font-bold text-text">{request.memberName}</p>
-                      <RequestStatusBadge status={request.status} />
+          <div className="mt-3 flex flex-wrap gap-2">
+            {pendingGroups.map(group => {
+              const pending = pendingByGroup.get(group.key) ?? 0
+              return (
+                <button
+                  key={group.key}
+                  type="button"
+                  onClick={() => {
+                    setOrganizationFilter(group.key)
+                    setFilter("pending")
+                    setQuery("")
+                  }}
+                  className="flex items-center gap-2 rounded-full border border-gold/40 bg-white px-3 py-1.5 text-sm font-bold text-text transition-colors hover:border-gold hover:bg-gold-light"
+                >
+                  <span>{group.name}</span>
+                  <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-gold px-1.5 text-[11px] font-extrabold text-navy">
+                    {pending}
+                  </span>
+                </button>
+              )
+            })}
+            {(organizationFilter !== "all" || filter !== "pending") && (
+              <Button
+                variant="ghost"
+                size="compact"
+                fullWidth={false}
+                onClick={() => {
+                  setOrganizationFilter("all")
+                  setFilter("pending")
+                  setQuery("")
+                }}
+                className="text-gold hover:bg-white/60"
+              >
+                Show all ministries
+              </Button>
+            )}
+          </div>
+        </section>
+      )}
+      <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
+        <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
+          <InputField
+            id="request-search"
+            label="Search members"
+            value={query}
+            onChange={setQuery}
+            placeholder="Search by member name"
+          />
+          <OrganizationFilter
+            id="request-organization"
+            label="Ministry"
+            value={organizationFilter}
+            onChange={setOrganizationFilter}
+            options={organizationOptions}
+          />
+          <div>
+            <p className="mb-2 text-sm font-semibold text-text">Status</p>
+            <div className="flex flex-wrap rounded-xl bg-bg p-1">
+              {(["pending", "approved", "rejected", "all"] as const).map(value => (
+                <Button
+                  key={value}
+                  variant={filter === value ? "tabActive" : "tabInactive"}
+                  size="compact"
+                  fullWidth={false}
+                  onClick={() => setFilter(value)}
+                  className="capitalize"
+                >
+                  {value === "all" ? "All" : value} ({statusCounts[value]})
+                </Button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+      {!visibleGroups.length ? (
+        <EmptyState
+          title={
+            !requests.length
+              ? "No join requests"
+              : filter === "pending" && statusCounts.pending === 0 && organizationFilter === "all"
+                ? "No pending requests"
+                : "No matching requests"
+          }
+          detail={
+            !requests.length
+              ? "New membership requests will appear here, grouped under the ministry they asked to join."
+              : filter === "pending" && statusCounts.pending === 0 && organizationFilter === "all"
+                ? "Every request has been reviewed. Open the Approved or All tab to look back at past decisions."
+                : "There are no requests matching this ministry, status, and search."
+          }
+          action={requests.length ? (
+            <Button
+              fullWidth={false}
+              size="compact"
+              onClick={() => {
+                setOrganizationFilter("all")
+                setFilter("all")
+                setQuery("")
+              }}
+            >
+              Show all requests
+            </Button>
+          ) : undefined}
+        />
+      ) : (
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="text-xl font-bold text-text">
+                {filter === "all" ? "All requests" : `${filter[0].toUpperCase()}${filter.slice(1)} requests`} by ministry
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                {filter === "pending"
+                  ? "Approve or reject a whole ministry's pending requests at once, or one member at a time."
+                  : "Review the status of submitted membership requests, grouped by ministry."}
+              </p>
+            </div>
+            <p className="text-sm font-bold text-muted">{visibleCount} shown</p>
+          </div>
+          {visibleGroups.map(group => {
+            const pendingIds = group.items
+              .filter(request => request.status === "pending")
+              .map(request => request.id)
+            const joinCode = group.organization?.joinCode || group.items[0]?.groupCode
+            return (
+              <OrganizationGroupCard
+                key={group.key}
+                name={group.name}
+                badges={group.organization && <MinistryStatusPill status={group.organization.status} />}
+                subtitle={[
+                  group.organization?.category,
+                  `${group.items.length} ${group.items.length === 1 ? "request" : "requests"} shown`,
+                  joinCode ? `Join code ${joinCode}` : undefined,
+                ].filter(Boolean).join(" · ")}
+                action={pendingIds.length > 1 ? (
+                  <Button
+                    variant="secondary"
+                    size="compact"
+                    fullWidth={false}
+                    onClick={() => approveAll(group.name, pendingIds)}
+                    className="whitespace-nowrap"
+                  >
+                    Approve all {pendingIds.length}
+                  </Button>
+                ) : undefined}
+              >
+                <div className="divide-y divide-border">
+                  {group.items.map(request => (
+                    <div
+                      key={request.id}
+                      className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5"
+                    >
+                      <div className="flex min-w-0 items-start gap-3">
+                        <MemberAvatar name={request.memberName} />
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-bold text-text">{request.memberName}</p>
+                            <RequestStatusBadge status={request.status} />
+                          </div>
+                          <p className="mt-1 text-sm leading-relaxed text-muted">
+                            Wants to join{" "}
+                            <span className="font-semibold text-navy">{group.name}</span>
+                            {request.groupCode ? (
+                              <> · code <span className="font-mono font-semibold text-text">{request.groupCode}</span></>
+                            ) : (
+                              " · no join code"
+                            )}
+                          </p>
+                          <p className="mt-1 text-xs text-muted">
+                            Submitted {formatDateTime(request.requestedAt)}
+                          </p>
+                        </div>
+                      </div>
+                      {request.status === "pending" ? (
+                        <div className="flex shrink-0 gap-2 pl-13 sm:pl-0">
+                          <Button size="compact" fullWidth={false} onClick={() => onApprove(request.id)}>
+                            Approve
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="compact"
+                            fullWidth={false}
+                            onClick={() => onReject(request.id)}
+                          >
+                            Reject
+                          </Button>
+                        </div>
+                      ) : (
+                        <p className="shrink-0 pl-13 text-sm font-semibold text-muted sm:pl-0">
+                          {request.status === "approved" ? "Approved" : "Rejected"}
+                          {request.reviewedAt ? ` · ${formatDateTime(request.reviewedAt)}` : ""}
+                        </p>
+                      )}
                     </div>
-                    <p className="mt-2 text-sm text-muted">
-                      Requested to join <span className="font-semibold text-text">{request.groupName}</span>{" "}
-                      {request.groupCode ? `(${request.groupCode})` : "(no join code)"}
-                    </p>
-                    <p className="mt-1 text-xs text-muted">Submitted {formatDateTime(request.requestedAt)}</p>
-                  </div>
-                  {request.status === "pending" && (
-                    <div className="flex gap-2">
-                      <Button size="compact" fullWidth={false} onClick={() => onApprove(request.id)}>Approve</Button>
-                      <Button variant="danger" size="compact" fullWidth={false} onClick={() => onReject(request.id)}>Reject</Button>
-                    </div>
-                  )}
+                  ))}
                 </div>
-              </div>
-            ))}
+              </OrganizationGroupCard>
+            )
+          })}
         </section>
       )}
     </div>
   )
 }
 
-function OrganizationList({ admin, onCreate, onOpen, scoped }: {
+function OrganizationList({ admin, requests, onCreate, onOpen, scoped }: {
   admin: ReturnType<typeof useAdmin>
+  /** Pending join requests, summarised on each ministry row. */
+  requests: JoinRequest[]
   onCreate: () => void
   onOpen: (id: string) => void
   scoped: boolean
@@ -338,13 +668,24 @@ function OrganizationList({ admin, onCreate, onOpen, scoped }: {
       : b.createdAt.localeCompare(a.createdAt)),
   [admin.organizations, query, sort, status])
 
+  const pendingByOrganization = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const request of requests) {
+      if (request.status !== "pending") continue
+      const organization = resolveRequestOrganization(request, admin.organizations)
+      if (!organization) continue
+      counts.set(organization.id, (counts.get(organization.id) ?? 0) + 1)
+    }
+    return counts
+  }, [admin.organizations, requests])
+
   return (
     <div className="space-y-6">
       <AdminHeader
         eyebrow={scoped ? "Coordination" : "Administration"}
         title={scoped ? "My ministries" : "Organizations"}
         description={scoped
-          ? "The ministries you coordinate. You can add and organise their events; an administrator manages the ministry profile."
+          ? "The ministries you coordinate. You can add and organise their events and review their join requests; an administrator manages the ministry profile."
           : "Create and maintain the organizations that own your events."}
         action={scoped ? undefined : <Button fullWidth={false} size="compact" onClick={onCreate}>Create organization</Button>}
       />
@@ -396,9 +737,17 @@ function OrganizationList({ admin, onCreate, onOpen, scoped }: {
                   <p className="mt-1 text-sm text-muted">{organization.contactEmail || "No contact email"}</p>
                 </div>
                 <p className="text-sm font-medium text-text">{organization.category}</p>
-                <p className="text-sm text-muted">
-                  {admin.events.filter(event => event.organizationId === organization.id).length} events
-                </p>
+                <div>
+                  <p className="text-sm text-muted">
+                    {admin.events.filter(event => event.organizationId === organization.id).length} events
+                  </p>
+                  {(pendingByOrganization.get(organization.id) ?? 0) > 0 && (
+                    <p className="mt-1 text-xs font-bold text-gold">
+                      {pendingByOrganization.get(organization.id)} pending{" "}
+                      {pendingByOrganization.get(organization.id) === 1 ? "request" : "requests"}
+                    </p>
+                  )}
+                </div>
                 <div className="flex items-center gap-3 md:justify-end">
                   <StatusBadge status={organization.status} />
                   <Button variant="ghost" size="compact" fullWidth={false} onClick={() => onOpen(organization.id)}>View</Button>
@@ -502,8 +851,8 @@ function OrganizationDetails({ organization, admin, onBack, onEdit, onCreateEven
           {scoped ? (
             <div className="mt-4 flex flex-col gap-3">
               <p className="rounded-xl bg-bg p-3 text-sm leading-relaxed text-muted">
-                You can add and organise events for this ministry. Only an administrator can change
-                the ministry profile, its status, or its coordinators.
+                You can add and organise events and review join requests for this ministry. Only an
+                administrator can change the ministry profile, its status, or its coordinators.
               </p>
               <Button variant="secondary" onClick={onCreateEvent} disabled={organization.status === "inactive"}>
                 Create event
@@ -623,9 +972,11 @@ function OrganizationForm({ initial, onCancel, onSave }: {
   )
 }
 
-function EventList({ admin, onCreate, onEdit, scoped, view, onViewChange, position, onPositionChange }: {
+function EventList({ admin, onCreate, onCreateForOrganization, onEdit, scoped, view, onViewChange, position, onPositionChange }: {
   admin: ReturnType<typeof useAdmin>
   onCreate: () => void
+  /** Opens the event form with a ministry already chosen. */
+  onCreateForOrganization: (organizationId: string) => void
   onEdit: (id: string) => void
   scoped: boolean
   /** List or timeline; kept by the workspace so an event form returns to it. */
@@ -636,12 +987,44 @@ function EventList({ admin, onCreate, onEdit, scoped, view, onViewChange, positi
 }) {
   const [query, setQuery] = useState("")
   const [status, setStatus] = useState<"all" | EventStatus>("all")
+  const [organizationFilter, setOrganizationFilter] = useState("all")
 
   const events = useMemo(() => admin.events
     .filter(event => event.title.toLowerCase().includes(query.trim().toLowerCase()))
     .filter(event => status === "all" || event.status === status)
+    .filter(event => organizationFilter === "all" || event.organizationId === organizationFilter)
     .sort((a, b) => a.startsAt.localeCompare(b.startsAt)),
-  [admin.events, query, status])
+  [admin.events, organizationFilter, query, status])
+
+  const organizationOptions = [
+    { value: "all", label: "All ministries", count: admin.events.length },
+    ...admin.organizations
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(organization => ({
+        value: organization.id,
+        label: organization.name,
+        count: admin.events.filter(event => event.organizationId === organization.id).length,
+      })),
+  ]
+
+  // Events are grouped by the ministry that runs them; an event whose ministry
+  // was removed is kept in one "unassigned" group rather than vanishing.
+  const groups = useMemo(
+    () => groupItemsByOrganization(admin.organizations, events, event => ({
+      organization: admin.organizations.find(organization => organization.id === event.organizationId),
+      fallbackName: "Unassigned ministry",
+    })),
+    [admin.organizations, events],
+  )
+
+  const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name))
+
+  function clearFilters() {
+    setQuery("")
+    setStatus("all")
+    setOrganizationFilter("all")
+  }
 
   function duplicate(id: string) {
     const nextId = admin.duplicateEvent(id)
@@ -662,13 +1045,20 @@ function EventList({ admin, onCreate, onEdit, scoped, view, onViewChange, positi
         eyebrow={scoped ? "Coordination" : "Administration"}
         title="Events"
         description={scoped
-          ? "Add and organise the events of the ministries you coordinate."
-          : "Plan, publish, duplicate, and maintain events across organizations."}
+          ? "The events of the ministries you coordinate, grouped so you can read one ministry at a time."
+          : "Plan, publish, duplicate, and maintain events. Each event is listed under the ministry that runs it."}
         action={<Button fullWidth={false} size="compact" onClick={onCreate}>Create event</Button>}
       />
       <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
-        <div className="grid gap-4 lg:grid-cols-[1fr_auto_auto] lg:items-end">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_auto_auto] xl:items-end">
           <InputField id="event-search" label="Search events" value={query} onChange={setQuery} placeholder="Search by event title" />
+          <OrganizationFilter
+            id="event-organization"
+            label="Ministry"
+            value={organizationFilter}
+            onChange={setOrganizationFilter}
+            options={organizationOptions}
+          />
           <div>
             <p className="mb-2 text-sm font-semibold text-text">Status</p>
             <div className="flex flex-wrap rounded-xl bg-bg p-1">
@@ -713,56 +1103,140 @@ function EventList({ admin, onCreate, onEdit, scoped, view, onViewChange, positi
           </div>
         </div>
       </div>
-      {events.length ? (
-        view === "timeline" ? (
-          <EventsTimeline
-            events={events}
-            organizations={admin.organizations}
-            position={position}
-            onPositionChange={onPositionChange}
-            onEdit={onEdit}
+      {!events.length ? (
+        admin.loading ? (
+          <EmptyState title="Loading events" detail="Reading the schedule from your workspace." />
+        ) : admin.events.length ? (
+          <EmptyState
+            title="No events found"
+            detail="No event matches this ministry, status, and search."
+            action={<Button fullWidth={false} size="compact" onClick={clearFilters}>Clear filters</Button>}
           />
         ) : (
-          <div className="space-y-3">
-            {events.map(event => {
-              const organization = admin.organizations.find(item => item.id === event.organizationId)
-              return (
-                <div key={event.id} className="rounded-2xl border border-border bg-white p-5 shadow-sm">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <p className="text-lg font-bold text-text">{event.title}</p>
-                        <StatusBadge status={event.status} />
-                      </div>
-                      <p className="mt-2 text-sm font-semibold text-navy">{organization?.name}</p>
-                      <p className="mt-1 text-sm text-muted">{formatEventWhen(event)} · {event.location}</p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                      <Button variant="secondary" size="compact" onClick={() => onEdit(event.id)} className="w-full sm:w-auto">Edit</Button>
-                      <Button variant="secondary" size="compact" onClick={() => duplicate(event.id)} className="w-full sm:w-auto">Duplicate</Button>
-                      {event.status !== "cancelled" && (
-                        <Button variant="secondary" size="compact" onClick={() => cancel(event.id)} className="w-full whitespace-nowrap sm:w-auto">Cancel event</Button>
-                      )}
-                      <Button variant="danger" size="compact" onClick={() => remove(event.id)} className="w-full sm:w-auto">Delete</Button>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+          <EmptyState
+            title="No events yet"
+            detail={scoped
+              ? "Create an event for one of the ministries you coordinate to start scheduling."
+              : "Create an event for one of your organizations to start scheduling."}
+            action={<Button fullWidth={false} size="compact" onClick={onCreate}>Create event</Button>}
+          />
         )
-      ) : admin.loading ? (
-        <EmptyState title="Loading events" detail="Reading the schedule from your workspace." />
-      ) : admin.events.length ? (
-        <EmptyState title="No events found" detail="Try another search term or status filter." />
-      ) : (
-        <EmptyState
-          title="No events yet"
-          detail={scoped
-            ? "Create an event for one of the ministries you coordinate to start scheduling."
-            : "Create an event for one of your organizations to start scheduling."}
-          action={<Button fullWidth={false} size="compact" onClick={onCreate}>Create event</Button>}
+      ) : view === "timeline" ? (
+        <EventsTimeline
+          events={events}
+          organizations={admin.organizations}
+          position={position}
+          onPositionChange={onPositionChange}
+          onEdit={onEdit}
         />
+      ) : (
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="text-xl font-bold text-text">Events by ministry</p>
+              <p className="mt-1 text-sm text-muted">
+                Each ministry's schedule sits in one place, ordered by start time.
+              </p>
+            </div>
+            <p className="text-sm font-bold text-muted">{events.length} shown</p>
+          </div>
+          {sortedGroups.map(group => {
+            const publishedCount = group.items.filter(event => event.status === "published").length
+            const draftCount = group.items.filter(event => event.status === "draft").length
+            const organization = group.organization
+            return (
+              <OrganizationGroupCard
+                key={group.key}
+                name={group.name}
+                badges={(
+                  <>
+                    {organization && <MinistryStatusPill status={organization.status} />}
+                    {draftCount > 0 && (
+                      <span className="inline-flex rounded-full bg-gold-light px-2.5 py-0.5 text-[11px] font-bold text-gold">
+                        {draftCount} {draftCount === 1 ? "draft" : "drafts"}
+                      </span>
+                    )}
+                  </>
+                )}
+                subtitle={[
+                  organization?.category,
+                  `${group.items.length} ${group.items.length === 1 ? "event" : "events"}`,
+                  `${publishedCount} published`,
+                ].filter(Boolean).join(" · ")}
+                action={organization?.status === "active" ? (
+                  <Button
+                    variant="ghost"
+                    size="compact"
+                    fullWidth={false}
+                    onClick={() => onCreateForOrganization(organization.id)}
+                    className="whitespace-nowrap"
+                  >
+                    New event
+                  </Button>
+                ) : undefined}
+              >
+                <div className="divide-y divide-border">
+                  {group.items.map(event => (
+                    <div
+                      key={event.id}
+                      className="flex flex-col gap-3 px-4 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-bold text-text">{event.title}</p>
+                          <StatusBadge status={event.status} />
+                        </div>
+                        <p className="mt-1 text-sm leading-relaxed text-muted">
+                          {formatEventWhen(event)} · {event.location}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="ghost"
+                          size="compact"
+                          fullWidth={false}
+                          onClick={() => onEdit(event.id)}
+                          className="border border-border"
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="compact"
+                          fullWidth={false}
+                          onClick={() => duplicate(event.id)}
+                          className="border border-border"
+                        >
+                          Duplicate
+                        </Button>
+                        {event.status !== "cancelled" && (
+                          <Button
+                            variant="ghost"
+                            size="compact"
+                            fullWidth={false}
+                            onClick={() => cancel(event.id)}
+                            className="border border-border"
+                          >
+                            Cancel
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="compact"
+                          fullWidth={false}
+                          onClick={() => remove(event.id)}
+                          className="border border-red/30 text-red hover:bg-red-light"
+                        >
+                          Delete
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </OrganizationGroupCard>
+            )
+          })}
+        </section>
       )}
     </div>
   )
@@ -994,6 +1468,10 @@ export function AdminScreen({
   const admin = useAdmin(scoped ? { organizationIds: leaderOrganizationIds } : {})
   const messaging = useMessaging()
   const sections = scoped ? COORDINATOR_SECTIONS : ADMIN_SECTIONS
+  // The pending queue is the workspace's most time-sensitive work, so the
+  // navigation shows its size instead of hiding it inside the section. For a
+  // coordinator the list already contains only their ministries' requests.
+  const pendingRequestCount = requests.filter(request => request.status === "pending").length
   // The phone layout keeps the original five (or three) bottom tabs and reaches
   // Messages from the chat button in the header instead.
   const mobileSections = sections.filter(section => section.value !== "messages")
@@ -1065,10 +1543,12 @@ export function AdminScreen({
         onSaved={() => openSection("events")}
       />
     )
-  } else if (!scoped && view.name === "section" && view.section === "requests") {
+  } else if (view.name === "section" && view.section === "requests") {
     content = (
       <JoinRequestList
         requests={requests}
+        organizations={admin.organizations}
+        scoped={scoped}
         onApprove={onApproveRequest}
         onReject={onRejectRequest}
       />
@@ -1089,18 +1569,21 @@ export function AdminScreen({
     content = (
       <Dashboard
         admin={admin}
+        requests={requests}
         scoped={scoped}
         onEvents={() => openSection("events")}
         onTimeline={() => {
           setEventsView("timeline")
           openSection("events")
         }}
+        onOpenOrganization={id => setView({ name: "organization", id })}
       />
     )
   } else if (view.name === "section" && view.section === "organizations") {
     content = (
       <OrganizationList
         admin={admin}
+        requests={requests}
         scoped={scoped}
         onCreate={() => setView({ name: "organization-form" })}
         onOpen={id => setView({ name: "organization", id })}
@@ -1116,6 +1599,7 @@ export function AdminScreen({
         position={timelinePosition}
         onPositionChange={changeTimelinePosition}
         onCreate={() => setView({ name: "event-form" })}
+        onCreateForOrganization={organizationId => setView({ name: "event-form", organizationId })}
         onEdit={id => setView({ name: "event-form", id })}
       />
     )
@@ -1201,6 +1685,14 @@ export function AdminScreen({
                 className={`justify-start ${activeSection === value ? "bg-white text-navy" : "text-white hover:bg-white/10"}`}
               >
                 <span className="flex-1 text-left">{label}</span>
+                {value === "requests" && pendingRequestCount > 0 && (
+                  <span
+                    className="flex h-5 min-w-5 items-center justify-center rounded-full bg-gold px-1.5 text-[10px] font-extrabold text-navy"
+                    aria-label={`${pendingRequestCount} pending requests`}
+                  >
+                    {pendingRequestCount > 99 ? "99+" : pendingRequestCount}
+                  </span>
+                )}
                 {value === "messages" && messaging.unreadTotal > 0 && (
                   <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[#C0392B] px-1.5 text-[10px] font-extrabold text-white">
                     {messaging.unreadTotal > 99 ? "99+" : messaging.unreadTotal}
@@ -1219,7 +1711,7 @@ export function AdminScreen({
         </aside>
         <main className="min-w-0 flex-1 px-4 pb-28 pt-6 sm:px-7 lg:px-10 lg:py-9">
           <div className="mx-auto max-w-6xl">
-            {(admin.error || (!scoped && requestError)) && (
+            {(admin.error || requestError) && (
               <div role="alert" className="mb-5 rounded-xl border border-red/30 bg-red-light px-4 py-3 text-sm text-red">
                 {admin.error || requestError}
               </div>
@@ -1241,13 +1733,21 @@ export function AdminScreen({
             onClick={() => openSection(value)}
             ariaLabel={label}
             ariaPressed={activeSection === value}
-            className={`min-h-12 rounded-2xl px-1 text-xs sm:px-2 sm:text-sm ${
+            className={`relative min-h-12 rounded-2xl px-1 text-xs sm:px-2 sm:text-sm ${
               activeSection === value
                 ? "bg-navy/10 text-navy shadow-sm ring-1 ring-navy/15"
                 : "text-muted hover:bg-bg hover:text-navy"
             }`}
           >
             {short}
+            {value === "requests" && pendingRequestCount > 0 && (
+              <span
+                className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-gold px-1 text-[10px] font-extrabold text-navy"
+                aria-label={`${pendingRequestCount} pending requests`}
+              >
+                {pendingRequestCount > 9 ? "9+" : pendingRequestCount}
+              </span>
+            )}
           </Button>
         ))}
       </nav>

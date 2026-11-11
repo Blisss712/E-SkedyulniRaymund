@@ -86,12 +86,14 @@ ORDER BY tablename, cmd, policyname;
 --   organization_join_requests
 --     "Members insert own join requests"   (INSERT)
 --     "Members read own join requests"     (SELECT)
+--     "Coordinators read ministry join requests" (SELECT)
 --     "Admins full manage join requests"   (ALL)
 
 -- ------------------------------------------------------------------------------
 -- 5) Helper functions and who may execute them.
---    `anon_can_execute` must be false for approve_join_request; if it is true,
---    run supabase/harden_join_request_approval.sql once.
+--    `anon_can_execute` must be false for both decision functions; if it is true,
+--    run supabase/coordinator_join_approvals.sql once. That script also installs
+--    review_join_request and lets a coordinator decide their ministry's requests.
 -- ------------------------------------------------------------------------------
 SELECT
   p.proname AS function_name,
@@ -102,8 +104,22 @@ SELECT
 FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public'
-  AND p.proname IN ('is_admin', 'approve_join_request', 'is_organization_leader')
+  AND p.proname IN ('is_admin', 'approve_join_request', 'review_join_request', 'is_organization_leader')
 ORDER BY p.proname;
+
+-- ------------------------------------------------------------------------------
+-- 5b) The reviewer foreign key must accept both reviewers: an administrator and
+--     a coordinator are both auth users. If this still references admin_profiles,
+--     a coordinator's decision cannot be recorded: run
+--     supabase/coordinator_join_approvals.sql.
+-- ------------------------------------------------------------------------------
+SELECT
+  conname AS constraint_name,
+  pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conrelid = 'public.organization_join_requests'::regclass
+  AND contype = 'f'
+  AND pg_get_constraintdef(oid) LIKE '%(reviewed_by)%';
 
 -- ------------------------------------------------------------------------------
 -- 6) The organizations that exist right now, with the join code members type.

@@ -27,6 +27,9 @@ class OrganizationJoinRequest(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reviewed_by: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey("admin_profiles.user_id", ondelete="SET NULL"),
+        # A reviewer is either an administrator or the ministry's coordinator;
+        # both are auth users. The database enforces the auth.users foreign key
+        # (see supabase/coordinator_join_approvals.sql); auth.users is not part
+        # of this application's SQLAlchemy metadata.
     )
     reviewer_note: Mapped[str] = mapped_column(Text, default="", nullable=False)

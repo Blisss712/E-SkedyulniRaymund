@@ -10,10 +10,12 @@
 --   * see the ministry in their Coordinator Workspace.
 --   * create, edit, duplicate, publish, cancel, and delete the ministry's events.
 --   * read the ministry's events in every status, not only the published ones.
+--   * review the ministry's join requests (installed separately by
+--     supabase/coordinator_join_approvals.sql).
 --
 -- Coordinators keep their member dashboard: the same account can still set
--- availability and join open slots. They cannot create organizations, review
--- join requests, or appoint other coordinators. Those stay administrator-only.
+-- availability and join open slots. They cannot create organizations or appoint
+-- other coordinators. Those stay administrator-only.
 --
 -- The table is idempotent: running this script again does not duplicate rows or
 -- policies. It is safe on a project that already has some of it installed.

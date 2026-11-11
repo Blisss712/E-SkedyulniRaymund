@@ -215,12 +215,25 @@ export async function findOrganizationByJoinCode(code: string): Promise<GroupLoo
 
 // ─── Join requests ───────────────────────────────────────────────────────────
 
-/** Every request, for the administrator's review queue. */
-export async function fetchJoinRequests(): Promise<JoinRequest[]> {
-  const { data, error } = await supabase
+/**
+ * Join requests visible to this session. An administrator sees every request;
+ * a coordinator passes their ministry ids and sees only those, which is also
+ * what the database RLS policy enforces.
+ */
+export async function fetchJoinRequests(organizationIds?: string[]): Promise<JoinRequest[]> {
+  // Only a coordinator passes this list; an empty list means no ministry yet.
+  if (organizationIds && organizationIds.length === 0) return []
+
+  let query = supabase
     .from("organization_join_requests")
     .select(`${JOIN_REQUEST_COLUMNS}, organizations(name)`)
     .order("requested_at", { ascending: false })
+
+  if (organizationIds) {
+    query = query.in("organization_id", organizationIds)
+  }
+
+  const { data, error } = await query
   if (error) throw describe(error, "Unable to load join requests.")
   return ((data ?? []) as unknown as JoinRequestRow[]).map(joinRequestFromRow)
 }
@@ -257,19 +270,57 @@ export async function createJoinRequestRow(input: {
   return joinRequestFromRow(data as unknown as JoinRequestRow)
 }
 
+/** True when PostgREST cannot find the RPC at all, i.e. an older project. */
+function isMissingRpc(error: { code?: string; message?: string }): boolean {
+  return (
+    error.code === "PGRST202" ||
+    /could not find the function|function .* does not exist|schema cache/i.test(error.message ?? "")
+  )
+}
+
+function missingCoordinatorSetup(): Error {
+  return new Error(
+    "Coordinator join-request approvals are not set up in Supabase yet. Run supabase/coordinator_join_approvals.sql in the Supabase SQL editor, then reload.",
+  )
+}
+
 /**
- * Records an administrator's decision. Approving also creates the membership
- * row so the organization immediately shows up on the member's dashboard.
+ * Records a reviewer's decision.
  *
- * `approve_join_request()` (see supabase/schema.sql) does both steps in one
- * transaction; when it is not installed in the project we fall back to the two
- * explicit statements.
+ * `review_join_request()` (see supabase/coordinator_join_approvals.sql)
+ * authorizes an administrator or the coordinator of the request's own ministry
+ * and, on approval, creates the membership row in the same transaction. A
+ * coordinator's browser has no direct UPDATE policy on the table, so the RPC is
+ * the only way they can decide. Administrators keep the older fallbacks for a
+ * project that has not run the coordinator migration yet.
  */
 export async function reviewJoinRequest(
   id: string,
   status: "approved" | "rejected",
   reviewerId: string,
+  options: { coordinator?: boolean } = {},
 ): Promise<JoinRequest> {
+  const reviewed = await supabase.rpc("review_join_request", {
+    req_id: id,
+    decision: status,
+    reviewer_id: reviewerId,
+    note: "",
+  })
+
+  if (!reviewed.error) return fetchJoinRequest(id)
+
+  // The function exists and refused the decision (another ministry, inactive
+  // member, already reviewed). Never bypass that rule with a direct write.
+  if (!isMissingRpc(reviewed.error)) {
+    throw new Error(reviewed.error.message || "Unable to update the join request.")
+  }
+
+  // Older projects do not have the coordinator decision function. A coordinator
+  // must not fall back to a direct table write.
+  if (options.coordinator) throw missingCoordinatorSetup()
+
+  // Compatibility: projects that installed the administrator-only RPC still
+  // work for approvals.
   if (status === "approved") {
     const approved = await supabase.rpc("approve_join_request", {
       req_id: id,
@@ -277,6 +328,9 @@ export async function reviewJoinRequest(
       note: "",
     })
     if (!approved.error) return fetchJoinRequest(id)
+    if (!isMissingRpc(approved.error)) {
+      throw new Error(approved.error.message || "Unable to approve the join request.")
+    }
   }
 
   const { data, error } = await supabase
