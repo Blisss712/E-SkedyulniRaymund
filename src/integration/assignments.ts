@@ -18,24 +18,29 @@ export async function getMyAssignments(userId?: string): Promise<Assignment[]> {
     return memberApi.getAssignments()
   }
 
-  if (isSupabaseConfigured && userId) {
+  if (isSupabaseConfigured) {
+    // A signed-out member has no assignments, and a failed query must surface as
+    // an error instead of quietly showing the bundled sample rows.
+    if (!userId) return []
+
     const { data, error } = await supabase
       .from("member_assignments")
       .select("id, assignment_date, assignment_time, mass_name, role")
       .eq("user_id", userId)
       .order("assignment_date")
 
-    if (!error && data) {
-      return data.map((assignment) => ({
-        id: assignment.id,
-        date: assignment.assignment_date,
-        time: assignment.assignment_time.slice(0, 5),
-        massName: assignment.mass_name,
-        role: assignment.role,
-      }))
-    }
+    if (error) throw new Error(error.message)
+
+    return (data ?? []).map((assignment) => ({
+      id: assignment.id,
+      date: assignment.assignment_date,
+      time: assignment.assignment_time.slice(0, 5),
+      massName: assignment.mass_name,
+      role: assignment.role,
+    }))
   }
 
+  // Offline demo only: there is no database to read assignments from.
   return [
     {
       id: "a1",

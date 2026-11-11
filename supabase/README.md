@@ -187,24 +187,36 @@ already published before this function was installed, run:
 SELECT public.notify_event_members('your-event-id');
 ```
 
-## 2.1 Schedule assistant (optional)
+## 2.1 Ministry assistant
 
-The member dashboard includes a schedule assistant that answers questions from the
-current availability and open-slot data. The browser never receives an LLM API key:
-the optional Supabase Edge Function formats a deterministic answer using a
-server-side key, while the app falls back to the same deterministic answer if the
-function is not deployed or configured.
+The floating bubble on the member dashboard opens a chat assistant that answers
+from the ministries the member joined: their published events, the latest group
+messages, open volunteer slots, and saved availability. It uses a free-tier
+Gemini 3.x Flash model (`gemini-3.6-flash`, with `gemini-3.5-flash-lite` as a
+fallback while a model is busy).
 
-From the repository root, deploy the function with the Supabase CLI:
+The key is **server-side** in the root `.env`, next to the Supabase values:
 
-```powershell
-supabase functions deploy schedule-assistant
-supabase secrets set GEMINI_API_KEY=your-server-side-key GEMINI_MODEL=gemini-2.5-flash
+```dotenv
+GEMINI_API_KEY=your-free-google-ai-studio-key
+GEMINI_MODEL=gemini-3.6-flash
+GEMINI_FALLBACK_MODELS=gemini-3.5-flash-lite
 ```
 
-The function uses Google's Gemini `gemini-2.5-flash` model to format the
-deterministic answer. `GEMINI_API_KEY` must only be stored as a Supabase secret.
-Never add it to a `VITE_*` variable, log it, or commit it to the repository.
+The browser only calls `POST /api/assistant`; it never receives the key. On
+localhost the Vite dev server handles that route, and on Vercel the
+`api/assistant.ts` Edge Function handles it. Add the same three names under
+**Vercel -> Project Settings -> Environment Variables** before deploying.
+
+`GEMINI_MODEL` is the primary free-tier model and
+`GEMINI_FALLBACK_MODELS` is a comma-separated list tried when Gemini returns a
+capacity or rate-limit error. Without a key, the assistant still answers from
+the member's saved data, and the panel labels the source under each answer.
+
+The FastAPI helper in [`../backend`](../backend/README.md) is another optional
+backend. The app tries `/api/assistant` first, then that backend if it is
+configured. (The old `schedule-assistant` Supabase Edge Function has been
+removed; the app no longer calls `supabase.functions.invoke`.)
 
 ## 2.1 Verify event scheduling
 

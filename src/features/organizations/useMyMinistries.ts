@@ -9,7 +9,7 @@ import { fetchMyMinistries } from "./api"
  * connected. With Supabase configured the member's real memberships are shown
  * instead; the bundled list never stands in for them.
  */
-export const DEMO_MINISTRIES: Ministry[] = [
+const DEMO_MINISTRIES: Ministry[] = [
   { id: "lectors", name: "Lectors", parish: "St. Joseph Parish" },
   { id: "altar", name: "Altar Servers", parish: "St. Joseph Parish" },
   { id: "choir", name: "Parish Choir", parish: "St. Joseph Parish" },

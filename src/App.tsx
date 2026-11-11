@@ -39,6 +39,8 @@ import {
   takeWorkspaceIntent,
 } from "./features/auth/redirect"
 import { isSupabaseConfigured } from "./lib/supabase"
+import { AssistantPanel } from "./features/assistant/assistant"
+import type { AssistantFacts } from "./features/assistant/types"
 
 export default function App() {
   const {
@@ -73,6 +75,7 @@ export default function App() {
   const isCoordinator = profile?.role === "leader"
 
   const [homeTab, setHomeTab] = useState<HomeTab>("availability")
+  const [assistantOpen, setAssistantOpen] = useState(false)
   // The ministries belong to the signed-in member; the selection is just an id.
   // A request that is still waiting for approval is never the current ministry.
   const ministries = useMyMinistries()
@@ -147,6 +150,7 @@ export default function App() {
   }, [screen, activeRequestIds])
 
   function go(to: Screen) {
+    setAssistantOpen(false)
     setPrevScreen(screen)
     setScreen(to)
   }
@@ -365,66 +369,89 @@ export default function App() {
   }, [loading, authNotice, user])
 
   function renderMemberDashboard(embedded = false) {
+    // Everything the assistant is allowed to know, read from the same state the
+    // dashboard already shows. The snapshot filters events to joined ministries.
+    const assistantFacts: AssistantFacts = {
+      memberId: user?.id ?? "",
+      memberName: wizard.form.name || profile?.fullName || "Member",
+      ministries: ministries.items,
+      events: publishedEvents,
+      conversations: messaging.conversations,
+      slots: slots.slots,
+      recurringAvailability: availability.recurringEntries,
+      overrides: availability.overrides,
+    }
+
     return (
-      <HomeScreen
-        userName={wizard.form.name || profile?.fullName || "Maria Santos"}
-        ministries={ministries.items}
-        ministry={ministry}
-        onMinistryChange={next => setMinistryId(next.id)}
-        tab={homeTab}
-        onTabChange={setHomeTab}
-        onJoin={() => go("join-group")}
-        onLogout={() => {
-          void signOut()
-          reset()
-        }}
-        isAdmin={profile?.role === "admin"}
-        onAdmin={openWorkspace}
-        isLeader={profile?.role === "leader"}
-        onLeader={openWorkspace}
-        embedded={embedded}
-        unreadMessages={messaging.unreadTotal}
-      >
-        {homeTab === "availability" ? (
-          <AvailabilityTab
-            recurringEntries={availability.recurringEntries}
-            overrides={availability.overrides}
-            slots={slots.slots}
-            error={availability.error}
-            scheduledEvents={publishedEvents}
-            onViewSlot={slot => {
-              slots.setActiveSlot(slot)
-              setDashboardReturnScreen(embedded ? "admin" : "home")
-              go("slot-serving")
-            }}
-            position={availability.timetablePosition}
-            onPositionChange={availability.changePosition}
-            onAddRecurring={() => { availability.startRecurring(); setDashboardReturnScreen(embedded ? "admin" : "home"); go("set-recurring") }}
-            onAddOverride={() => { availability.startOverride(); setDashboardReturnScreen(embedded ? "admin" : "home"); go("add-override") }}
-            onEditRecurring={e => { availability.startRecurring(e); setDashboardReturnScreen(embedded ? "admin" : "home"); go("set-recurring") }}
-            onEditOverride={e => { availability.startOverride(e); setDashboardReturnScreen(embedded ? "admin" : "home"); go("add-override") }}
-            onRemoveRecurring={availability.removeRecurring}
-            onRemoveOverride={availability.removeOverride}
-          />
-        ) : homeTab === "slots" ? (
-          <SlotList
-            slots={slots.slots}
-            onSlotTap={slot => {
-              setDashboardReturnScreen(embedded ? "admin" : "home")
-              go(slots.openSlot(slot))
-            }}
-          />
-        ) : (
-          <MessagesPanel
-            conversations={messaging.conversations}
-            loading={messaging.loading}
-            error={messaging.error}
-            onOpen={conversation =>
-              openChat(conversation, embedded ? "admin" : "home")
-            }
+      <>
+        <HomeScreen
+          userName={wizard.form.name || profile?.fullName || "Maria Santos"}
+          ministries={ministries.items}
+          ministry={ministry}
+          onMinistryChange={next => setMinistryId(next.id)}
+          tab={homeTab}
+          onTabChange={setHomeTab}
+          onJoin={() => go("join-group")}
+          onLogout={() => {
+            void signOut()
+            reset()
+          }}
+          isAdmin={profile?.role === "admin"}
+          onAdmin={openWorkspace}
+          isLeader={profile?.role === "leader"}
+          onLeader={openWorkspace}
+          embedded={embedded}
+          unreadMessages={messaging.unreadTotal}
+          onAssistant={() => setAssistantOpen(true)}
+        >
+          {homeTab === "availability" ? (
+            <AvailabilityTab
+              recurringEntries={availability.recurringEntries}
+              overrides={availability.overrides}
+              slots={slots.slots}
+              error={availability.error}
+              scheduledEvents={publishedEvents}
+              onViewSlot={slot => {
+                slots.setActiveSlot(slot)
+                setDashboardReturnScreen(embedded ? "admin" : "home")
+                go("slot-serving")
+              }}
+              position={availability.timetablePosition}
+              onPositionChange={availability.changePosition}
+              onAddRecurring={() => { availability.startRecurring(); setDashboardReturnScreen(embedded ? "admin" : "home"); go("set-recurring") }}
+              onAddOverride={() => { availability.startOverride(); setDashboardReturnScreen(embedded ? "admin" : "home"); go("add-override") }}
+              onEditRecurring={e => { availability.startRecurring(e); setDashboardReturnScreen(embedded ? "admin" : "home"); go("set-recurring") }}
+              onEditOverride={e => { availability.startOverride(e); setDashboardReturnScreen(embedded ? "admin" : "home"); go("add-override") }}
+              onRemoveRecurring={availability.removeRecurring}
+              onRemoveOverride={availability.removeOverride}
+            />
+          ) : homeTab === "slots" ? (
+            <SlotList
+              slots={slots.slots}
+              onSlotTap={slot => {
+                setDashboardReturnScreen(embedded ? "admin" : "home")
+                go(slots.openSlot(slot))
+              }}
+            />
+          ) : (
+            <MessagesPanel
+              conversations={messaging.conversations}
+              loading={messaging.loading}
+              error={messaging.error}
+              onOpen={conversation =>
+                openChat(conversation, embedded ? "admin" : "home")
+              }
+            />
+          )}
+        </HomeScreen>
+
+        {assistantOpen && (
+          <AssistantPanel
+            facts={assistantFacts}
+            onClose={() => setAssistantOpen(false)}
           />
         )}
-      </HomeScreen>
+      </>
     )
   }
 

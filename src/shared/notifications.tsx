@@ -122,27 +122,17 @@ function colorFor(kind: NotificationKind) {
   return "bg-[#C9921A]"
 }
 
-function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, (character) => {
-    const entities: Record<string, string> = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#039;",
-    }
-    return entities[character]
-  })
-}
-
 export function NotificationCenter({
   embedded = false,
 }: {
   embedded?: boolean
 }) {
   const { user } = useAuth()
-  const [notifications, setNotifications] =
-    useState<Notification[]>(readNotifications)
+  // A connected database owns this list; the browser cache is only for the
+  // offline demo, so one member's notifications never appear for another.
+  const [notifications, setNotifications] = useState<Notification[]>(() =>
+    isSupabaseConfigured ? [] : readNotifications(),
+  )
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState<"all" | "unread">("all")
   const [backendError, setBackendError] = useState<string | null>(null)
@@ -157,6 +147,11 @@ export function NotificationCenter({
   )
 
   useEffect(() => {
+    if (isSupabaseConfigured) {
+      // Drop any copy left by an older build now that the server owns this data.
+      localStorage.removeItem(STORAGE_KEY)
+      return
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(notifications))
   }, [notifications])
 
@@ -178,8 +173,13 @@ export function NotificationCenter({
         return
       }
 
-      if (!isSupabaseConfigured || !user) {
+      if (!isSupabaseConfigured) {
         if (active) setNotifications(readNotifications())
+        return
+      }
+
+      if (!user) {
+        if (active) setNotifications([])
         return
       }
 
@@ -338,49 +338,6 @@ export function NotificationCenter({
           }
         })
     }
-  }
-
-  async function simulateNotification() {
-    const notification = {
-      user_id: user?.id,
-      title: "New schedule update",
-      message: "A new activity was added to your ministry schedule.",
-      kind: "schedule" as const,
-    }
-
-    if (isMemberApiConfigured && user) {
-      try {
-        const saved = await memberApi.createNotification(notification)
-        setNotifications(current => [fromApiNotification(saved), ...current])
-        setBackendError(null)
-      } catch (reason) {
-        console.error("Unable to create notification:", reason)
-        setBackendError("Could not create a notification.")
-      }
-    } else if (isSupabaseConfigured && user) {
-      void supabase
-        .from("notifications")
-        .insert(notification)
-        .then(({ error }) => {
-          if (error) {
-            console.error("Unable to create notification:", error)
-            setBackendError("Could not create a notification.")
-          }
-        })
-    } else {
-      setNotifications((current) => [
-        {
-          id: `activity-${Date.now()}`,
-          title: notification.title,
-          message: notification.message,
-          time: "Just now",
-          kind: notification.kind,
-          unread: true,
-        },
-        ...current,
-      ])
-    }
-    setOpen(true)
   }
 
   async function clearAll() {
@@ -558,7 +515,7 @@ export function NotificationCenter({
                       <button
                         type="button"
                         onClick={() => markRead(notification.id)}
-                        aria-label={`Mark ${escapeHtml(notification.title)} as read`}
+                        aria-label={`Mark ${notification.title} as read`}
                         title="Mark as read"
                         className="p-1 text-sm text-[#94A3B8] hover:text-[#1B3A6B]"
                       >
@@ -568,7 +525,7 @@ export function NotificationCenter({
                     <button
                       type="button"
                       onClick={() => remove(notification.id)}
-                      aria-label={`Dismiss ${escapeHtml(notification.title)}`}
+                      aria-label={`Dismiss ${notification.title}`}
                       title="Dismiss"
                       className="p-1 text-base leading-none text-[#94A3B8] hover:text-[#C0392B]"
                     >
@@ -580,14 +537,7 @@ export function NotificationCenter({
             )}
           </div>
 
-          <div className="flex items-center justify-between bg-[#FCFCFE] px-4 py-3">
-            <button
-              type="button"
-              onClick={simulateNotification}
-              className="text-xs font-bold text-[#1B3A6B] hover:text-[#C9921A]"
-            >
-              + Simulate notification
-            </button>
+          <div className="flex items-center justify-end bg-[#FCFCFE] px-4 py-3">
             <button
               type="button"
               onClick={clearAll}

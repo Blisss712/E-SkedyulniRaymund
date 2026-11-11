@@ -504,6 +504,10 @@ export function ChatScreen({
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const messagesRef = useRef<ChatMessage[]>([])
   messagesRef.current = messages
+  // The same ChatScreen instance is reused when the member switches threads, so
+  // an in-flight request or send must be checked against the thread it began in.
+  const conversationIdRef = useRef(conversation.id)
+  conversationIdRef.current = conversation.id
 
   const myId = user?.id ?? (isSupabaseConfigured ? "" : DEMO_ME_ID)
   const isGroup = conversation.kind === "organization"
@@ -678,6 +682,10 @@ export function ChatScreen({
     setPeopleView(null)
     setPeopleError("")
     setPeopleBusy(false)
+    // Do not carry a half-written message (or the sending state) into the new
+    // thread, which would let the draft be sent to the wrong conversation.
+    setDraft("")
+    setSending(false)
 
     Promise.all([
       fetchMessages(conversation.id),
@@ -715,7 +723,9 @@ export function ChatScreen({
   useEffect(() => {
     const timer = window.setInterval(() => {
       void fetchConversationSettings(conversation.id)
-        .then(setSettings)
+        .then(next => {
+          if (conversationIdRef.current === conversation.id) setSettings(next)
+        })
         .catch(() => undefined)
     }, 20_000)
 
@@ -742,6 +752,8 @@ export function ChatScreen({
     const timer = window.setInterval(() => {
       void fetchMessages(conversation.id)
         .then(saved => {
+          // Ignore a slow response for a thread the member already left.
+          if (conversationIdRef.current !== conversation.id) return
           const known = new Set(messagesRef.current.map(item => item.id))
           const hasNewMessage = saved.some(
             item => !known.has(item.id) && item.senderId !== myId,
@@ -771,10 +783,17 @@ export function ChatScreen({
     const clean = draft.trim()
     if (!clean || sending) return
 
+    const targetId = conversation.id
     setSending(true)
     setError("")
     try {
-      const saved = await sendMessage(conversation.id, clean)
+      const saved = await sendMessage(targetId, clean)
+      // The member may have switched threads while the message was in flight;
+      // deliver it only to the conversation that was open when they sent it.
+      if (conversationIdRef.current !== targetId) {
+        void refresh()
+        return
+      }
       setMessages(current =>
         current.some(item => item.id === saved.id)
           ? current
@@ -784,13 +803,16 @@ export function ChatScreen({
       readNow()
       inputRef.current?.focus()
     } catch (reason) {
+      if (conversationIdRef.current !== targetId) return
       setError(
         reason instanceof Error
           ? reason.message
           : "Unable to send that message.",
       )
     } finally {
-      setSending(false)
+      // A send that finished after the member switched threads must not clear
+      // the sending flag of a newer message in the newly opened thread.
+      if (conversationIdRef.current === targetId) setSending(false)
     }
   }
 

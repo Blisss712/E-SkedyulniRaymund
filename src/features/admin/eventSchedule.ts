@@ -42,7 +42,7 @@ function pad(value: number) {
 }
 
 /** `YYYY-MM-DDTHH:mm` -> the date and time halves, each safe to put in an input. */
-export function splitDateTime(value: string): [string, string] {
+function splitDateTime(value: string): [string, string] {
   if (!value) return ["", ""]
   const [date = "", time = ""] = value.split("T")
   return [date, time.slice(0, 5)]
@@ -85,7 +85,7 @@ function utcDate(dateKey: string) {
 }
 
 /** Adds days to a `YYYY-MM-DD` key without ever shifting across a timezone. */
-export function addDaysToKey(dateKey: string, days: number): string {
+function addDaysToKey(dateKey: string, days: number): string {
   const date = utcDate(dateKey)
   date.setUTCDate(date.getUTCDate() + days)
   return date.toISOString().slice(0, 10)
@@ -142,10 +142,15 @@ export function eventOccurrences(
   }
 
   const blocks: EventOccurrence[] = []
+  // A multi-day recurring event can have overlapping occurrences (a 10-day
+  // event that repeats weekly, for example). The timeline shows one block per
+  // day, so deduplicate by date.
+  const seenDates = new Set<string>()
   for (const anchor of anchorDates) {
     for (let offset = 0; offset <= duration; offset += 1) {
       const date = addDaysToKey(anchor, offset)
-      if (date < windowStart || date > windowEnd) continue
+      if (date < windowStart || date > windowEnd || seenDates.has(date)) continue
+      seenDates.add(date)
       blocks.push({ date, start: startTime, end: endTime })
     }
   }
@@ -153,14 +158,14 @@ export function eventOccurrences(
 }
 
 /** `13:00` -> `1:00 PM`. */
-export function formatClock(time: string): string {
+function formatClock(time: string): string {
   const [hour, minute] = time.split(":").map(Number)
   if (!Number.isFinite(hour) || !Number.isFinite(minute)) return time
   return `${hour % 12 || 12}:${pad(minute)} ${hour >= 12 ? "PM" : "AM"}`
 }
 
 /** `13:00`, `15:00` -> `1:00 PM – 3:00 PM`. */
-export function formatTimeRange(start: string, end: string): string {
+function formatTimeRange(start: string, end: string): string {
   if (!start || !end) return ""
   return `${formatClock(start)} – ${formatClock(end)}`
 }

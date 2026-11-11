@@ -74,7 +74,7 @@ function embeddedOrganization(
   return Array.isArray(value) ? value[0] ?? null : value
 }
 
-export function organizationFromRow(row: OrganizationRow): Organization {
+function organizationFromRow(row: OrganizationRow): Organization {
   return {
     id: row.id,
     name: row.name,
@@ -104,7 +104,7 @@ function organizationValues(draft: OrganizationDraft) {
   }
 }
 
-export function joinRequestFromRow(row: JoinRequestRow): JoinRequest {
+function joinRequestFromRow(row: JoinRequestRow): JoinRequest {
   const organization = embeddedOrganization(row.organizations)
   return {
     id: row.id,

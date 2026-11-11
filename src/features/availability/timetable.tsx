@@ -640,6 +640,8 @@ export function WeeklyTimetable({
 
   // On narrow screens, slide today's column into view.
 
+  const weekStartKey = localDateKey(weekStart)
+
   useEffect(() => {
     const container = scrollRef.current
 
@@ -654,7 +656,7 @@ export function WeeklyTimetable({
 
       syncHeader()
     }
-  }, [view, todayIndex, weekStart])
+  }, [view, todayIndex, weekStartKey])
 
   // The preview can't be scrolled, so start it at the hour of the earliest entry shown instead of an empty morning.
 

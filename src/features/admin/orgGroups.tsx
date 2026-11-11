@@ -11,7 +11,7 @@ import type { JoinRequest, Organization, OrganizationStatus } from "./types"
  */
 
 /** Two-letter monogram used by ministry and member avatars. */
-export function initials(name: string): string {
+function initials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean)
   if (words.length === 0) return "?"
   return words

@@ -333,9 +333,9 @@ export function HomeScreen({
         <button
           type="button"
           onClick={onAssistant}
-          aria-label="Open schedule assistant"
-          title="Ask the schedule assistant"
-          className="fixed right-5 z-40 flex h-16 w-16 items-center justify-center rounded-full border-4 border-white bg-[#1B3A6B] text-white shadow-[0_8px_24px_rgba(27,58,107,0.3)] transition-transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-[#C9921A]/40 active:scale-95"
+          aria-label="Open AI assistant"
+          title="Ask the AI assistant about your events and group messages"
+          className="fixed right-5 z-40 flex h-[52px] items-center gap-2.5 rounded-full border-4 border-white bg-[#1B3A6B] pl-3.5 pr-[18px] text-white shadow-[0_8px_24px_rgba(27,58,107,0.3)] transition-transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-[#C9921A]/40 active:scale-95"
           style={{
             bottom: embedded
               ? "1.25rem"
@@ -343,27 +343,21 @@ export function HomeScreen({
           }}
         >
           <span
-            className="absolute inset-1 rounded-full border-2 border-[#C9921A]/80"
+            className="pointer-events-none absolute inset-1 rounded-full border-2 border-[#C9921A]/80"
             aria-hidden="true"
           />
+          {/* A sparkle mark plus a label, so it reads as the AI assistant, not chat. */}
           <svg
             viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            className="relative h-7 w-7"
+            fill="currentColor"
+            className="relative h-[22px] w-[22px] shrink-0"
             aria-hidden="true"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M7.5 18.5 4 21l.9-4.1A8 8 0 0 1 4 12c0-4.4 3.6-8 8-8s8 3.6 8 8-3.6 8-8 8c-1.6 0-3.1-.5-4.5-1.5Z"
-            />
-            <path
-              strokeLinecap="round"
-              d="M8.5 12h.01M12 12h.01M15.5 12h.01"
-            />
+            <path d="M12 1.4C12.65 7.2 16.8 11.35 22.6 12 16.8 12.65 12.65 16.8 12 22.6 11.35 16.8 7.2 12.65 1.4 12 7.2 11.35 11.35 7.2 12 1.4Z" />
           </svg>
+          <span className="relative whitespace-nowrap text-[13px] font-bold leading-none tracking-wide">
+            AI Assistant
+          </span>
         </button>
       )}
 

@@ -132,11 +132,6 @@ export const memberApi = {
   getJoinRequest: (id: string) =>
     request<MemberJoinRequest>(`/member/join-requests/${encodeURIComponent(id)}`),
   getNotifications: () => request<MemberNotification[]>("/member/notifications"),
-  createNotification: (input: Pick<MemberNotification, "title" | "message" | "kind">) =>
-    request<MemberNotification>("/member/notifications", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
   markAllNotificationsRead: () =>
     request("/member/notifications/read", { method: "PATCH" }),
   markNotificationRead: (id: string) =>

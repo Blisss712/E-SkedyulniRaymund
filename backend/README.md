@@ -20,6 +20,7 @@ This folder contains the FastAPI service for the admin module.
    - `SUPABASE_PUBLISHABLE_KEY`: server-side auth client key used to sign in and validate access tokens.
    - `SUPABASE_SECRET_KEY`: server-only key used only by trusted bootstrap/admin operations.
    - `CORS_ORIGINS`: the frontend origin, such as `http://localhost:8443`.
+   - `GEMINI_API_KEY`: optional free Google AI Studio key for the member dashboard assistant. It stays on the server.
 
    Never commit `.env` or expose `SUPABASE_SECRET_KEY` to the browser.
 
@@ -50,6 +51,48 @@ uvicorn admin_backend.app:app --app-dir backend --reload
 
 The health endpoint is `GET http://127.0.0.1:8000/admin/health`.
 
+## Ministry assistant (Gemini)
+
+The member dashboard assistant normally uses the `POST /api/assistant` route
+(the Vite dev server locally and the Vercel Edge Function in production). This
+FastAPI route is an optional alternative for local development. The Gemini key
+is read from `backend/.env` on the server; the browser only sends the member's
+Supabase token and a grounded summary of their ministries, events, messages,
+slots, and availability. It never receives the key.
+
+Add the assistant settings to `backend/.env`:
+
+```dotenv
+GEMINI_API_KEY=your-free-google-ai-studio-key
+GEMINI_MODEL=gemini-3.6-flash
+GEMINI_FALLBACK_MODELS=gemini-3.5-flash-lite
+```
+
+The service tries the primary free model, then the fallback if Gemini returns a
+capacity or rate-limit error, and remembers which model worked. `gemini-3.6-flash`
+is the working free 3.x default; newer models can be set in `GEMINI_MODEL` when
+they are available. Get a key at <https://aistudio.google.com/apikey>.
+
+For just the assistant, run the lightweight entry point (no database needed):
+
+```powershell
+uvicorn admin_backend.assistant_app:app --app-dir backend --reload --port 8001
+```
+
+Then point the frontend at it in the root `.env`:
+
+```dotenv
+VITE_ASSISTANT_API_URL=http://127.0.0.1:8001
+```
+
+The app tries `/api/assistant` first and uses this server when the route is
+unavailable and `VITE_ASSISTANT_API_URL` is set.
+
+If the full backend is already running on port 8000, use
+`http://127.0.0.1:8000` instead; the same `/member/assistant/*` routes are
+registered there. Without a server or key, the bubble still answers from the
+member's saved data.
+
 The admin API includes:
 
 - `POST /admin/auth/login`
@@ -68,6 +111,8 @@ The admin API includes:
   - Volunteer slot listings and signup/cancellation
   - Personal assignments
   - Notification listing, creation, read state, and dismissal
+  - Ministry assistant: `GET /member/assistant/health` and
+    `POST /member/assistant/chat`
 
 Member endpoints accept the same Supabase Auth bearer token as admin endpoints
 and only return or modify data belonging to the authenticated member. Set

@@ -93,7 +93,7 @@ function getProviderDisplayName(user: User): string | undefined {
  * Whether the account setup wizard (name + group code) has been finished.
  *
  * A social sign-up arrives with the provider's name already filled in, so the
- * name cannot tell a brand-new account from a returning one â€” only a recorded
+ * name cannot tell a brand-new account from a returning one — only a recorded
  * flag can. There are two places to look for it, strongest first:
  *
  *  1. `member_profiles.onboarded` (supabase/member_onboarding.sql), the durable
@@ -104,7 +104,7 @@ function getProviderDisplayName(user: User): string | undefined {
  * When neither records anything the account is treated as new and goes through
  * setup once, which then records the flag. Guessing from `last_sign_in_at`
  * instead used to mislabel every account that had signed in before the flag
- * existed â€” those members skipped setup for good, even though they had never
+ * existed — those members skipped setup for good, even though they had never
  * been asked.
  */
 function resolveOnboarded(
@@ -1034,7 +1034,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /**
    * Finishes the account setup wizard for the signed-in member: it stores the
    * name that was confirmed and records that onboarding is done, so the next
-   * sign-in â€” including one that returns from Google or Facebook â€” opens the
+   * sign-in — including one that returns from Google or Facebook — opens the
    * dashboard instead of asking for the same details again.
    *
    * Both writes are best effort. `onboarded` needs

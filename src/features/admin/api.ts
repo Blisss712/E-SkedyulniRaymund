@@ -35,7 +35,7 @@ export function getAdminToken() {
   return window.localStorage.getItem(TOKEN_KEY)
 }
 
-export function clearAdminToken() {
+function clearAdminToken() {
   window.localStorage.removeItem(TOKEN_KEY)
 }
 
@@ -73,10 +73,6 @@ export async function createJoinRequest(input: Omit<JoinRequest, "id" | "status"
     memberName: input.memberName,
     groupCode: input.groupCode,
   })
-}
-
-export async function loadJoinRequest(id: string) {
-  return memberApi.getJoinRequest(id)
 }
 
 export async function updateJoinRequest(id: string, status: "approved" | "rejected") {
